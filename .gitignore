@@ -1,0 +1,33 @@
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.env
+*.pem
+*.key
+
+# Rust
+**/target/
+target/
+**/*.rs.bk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDEs & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node & Frontend (for future frontend integrations)
+**/node_modules/
+**/dist/
+**/.next/
+
+# Logs & Temporary Data
+**/logs/
+**/tmp/
+*.log
