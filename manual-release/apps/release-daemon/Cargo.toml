@@ -1,0 +1,17 @@
+[package]
+name = "release-daemon"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+actix-web = "4"
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", features = ["serde"] }
+dotenvy = "0.15.7"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
+thiserror = "2.0.20"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.10.0", features = ["v4", "serde"] }
