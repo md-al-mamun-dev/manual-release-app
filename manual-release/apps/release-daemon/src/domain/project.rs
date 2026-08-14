@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: Uuid,
@@ -42,7 +42,17 @@ pub struct UpdateProjectRequest {
 
     pub repository_path: Option<String>,
 
-    pub repository_url: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub repository_url: Option<Option<String>>,
 
-    pub default_branch: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub default_branch: Option<Option<String>>,
+}
+
+fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
 }

@@ -5,6 +5,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum ApiError {
     #[error("{0}")]
+    Unprocessable(String),
+
+    #[error("{0}")]
     Validation(String),
 
     #[error("{0}")]
@@ -35,6 +38,7 @@ impl ApiError {
             Self::NotFound(_) => "NOT_FOUND",
             Self::Conflict(_) => "CONFLICT",
             Self::Internal => "INTERNAL_ERROR",
+            Self::Unprocessable(_) => "INSPECTION_FAILED",
         }
     }
 }
@@ -46,6 +50,7 @@ impl ResponseError for ApiError {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
         }
     }
 

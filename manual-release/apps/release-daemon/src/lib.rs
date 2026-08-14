@@ -3,6 +3,8 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod error;
+pub mod executor;
+pub mod inspection;
 pub mod repositories;
 pub mod routes;
 pub mod services;

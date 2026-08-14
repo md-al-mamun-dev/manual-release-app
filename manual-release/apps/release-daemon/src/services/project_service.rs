@@ -77,9 +77,13 @@ fn normalize_update_input(input: &mut UpdateProjectRequest) {
 
     input.repository_path = normalize_optional(input.repository_path.take());
 
-    input.repository_url = normalize_optional(input.repository_url.take());
+    if let Some(opt_val) = input.repository_url.take() {
+        input.repository_url = Some(normalize_optional(opt_val));
+    }
 
-    input.default_branch = normalize_optional(input.default_branch.take());
+    if let Some(opt_val) = input.default_branch.take() {
+        input.default_branch = Some(normalize_optional(opt_val));
+    }
 }
 
 fn normalize_optional(value: Option<String>) -> Option<String> {
@@ -117,7 +121,7 @@ fn validate_update_input(input: &UpdateProjectRequest) -> Result<(), ApiError> {
         validate_repository_path(repository_path)?;
     }
 
-    validate_optional_branch(input.default_branch.as_deref())?;
+    validate_optional_branch(input.default_branch.as_ref().and_then(|v| v.as_deref()))?;
 
     Ok(())
 }
