@@ -8,11 +8,13 @@ use release_daemon::{
         environment_repository::EnvironmentRepository,
         project_inspection_repository::ProjectInspectionRepository,
         project_repository::ProjectRepository,
+        release_repository::ReleaseRepository,
     },
     routes,
     services::{
         environment_service::EnvironmentService,
         project_inspection_service::ProjectInspectionService, project_service::ProjectService,
+        release_service::ReleaseService,
     },
 };
 use sqlx::PgPool;
@@ -25,6 +27,7 @@ fn create_state(pool: PgPool) -> web::Data<AppState> {
     let project_inspector = ProjectInspector::new(command_executor);
 
     let inspection_repository = ProjectInspectionRepository::new(pool.clone());
+    let inspection_repository_clone = inspection_repository.clone();
     let project_inspection_service = ProjectInspectionService::new(
         project_repository.clone(),
         inspection_repository,
@@ -35,11 +38,19 @@ fn create_state(pool: PgPool) -> web::Data<AppState> {
     let environment_service =
         EnvironmentService::new(environment_repository, project_repository.clone());
 
+    let release_repository = ReleaseRepository::new(pool.clone());
+    let release_service = ReleaseService::new(
+        project_repository.clone(),
+        inspection_repository_clone,
+        release_repository,
+    );
+
     web::Data::new(AppState {
         pool,
         project_service,
         project_inspection_service,
         environment_service,
+        release_service,
     })
 }
 

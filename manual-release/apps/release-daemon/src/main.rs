@@ -9,8 +9,7 @@ use release_daemon::{
     repositories::{
         environment_repository::EnvironmentRepository,
         project_inspection_repository::ProjectInspectionRepository,
-        project_repository::ProjectRepository,
-        release_repository::ReleaseRepository,
+        project_repository::ProjectRepository, release_repository::ReleaseRepository,
     },
     routes,
     services::{

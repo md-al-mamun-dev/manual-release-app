@@ -10,8 +10,7 @@ use release_daemon::{
     repositories::{
         environment_repository::EnvironmentRepository,
         project_inspection_repository::ProjectInspectionRepository,
-        project_repository::ProjectRepository,
-        release_repository::ReleaseRepository,
+        project_repository::ProjectRepository, release_repository::ReleaseRepository,
     },
     routes,
     services::{
@@ -130,7 +129,10 @@ async fn successful_release(pool: PgPool) {
     assert_eq!(release.project_id, project.id);
     assert_eq!(release.source_inspection_id, Some(inspection_id));
     assert_eq!(release.version, "v1.0.0");
-    assert_eq!(release.git_commit, "abcdef1234567890abcdef123456789012345678");
+    assert_eq!(
+        release.git_commit,
+        "abcdef1234567890abcdef123456789012345678"
+    );
     assert_eq!(release.git_branch.as_deref(), Some("main"));
     assert_eq!(release.source_dirty, false);
     assert_eq!(release.status, ReleaseStatus::Created.as_db_str());

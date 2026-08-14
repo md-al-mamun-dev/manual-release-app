@@ -2,11 +2,7 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::domain::release::{
-    Release,
-    ReleaseStateTransition,
-    ReleaseStatus,
-};
+use crate::domain::release::{Release, ReleaseStateTransition, ReleaseStatus};
 
 #[derive(Clone)]
 pub struct ReleaseRepository {
@@ -42,12 +38,10 @@ impl ReleaseRepository {
         &self,
         input: CreateReleaseInput<'_>,
     ) -> Result<Release, sqlx::Error> {
-        let mut transaction =
-            self.pool.begin().await?;
+        let mut transaction = self.pool.begin().await?;
 
-        let release =
-            sqlx::query_as::<_, Release>(
-                r#"
+        let release = sqlx::query_as::<_, Release>(
+            r#"
                 INSERT INTO releases (
                     id,
                     project_id,
@@ -83,18 +77,18 @@ impl ReleaseRepository {
                     created_at,
                     updated_at
                 "#,
-            )
-            .bind(input.id)
-            .bind(input.project_id)
-            .bind(input.source_inspection_id)
-            .bind(input.version)
-            .bind(input.git_commit)
-            .bind(input.git_branch)
-            .bind(input.source_dirty)
-            .bind(ReleaseStatus::Created.as_db_str())
-            .bind(input.requested_by)
-            .fetch_one(&mut *transaction)
-            .await?;
+        )
+        .bind(input.id)
+        .bind(input.project_id)
+        .bind(input.source_inspection_id)
+        .bind(input.version)
+        .bind(input.git_commit)
+        .bind(input.git_branch)
+        .bind(input.source_dirty)
+        .bind(ReleaseStatus::Created.as_db_str())
+        .bind(input.requested_by)
+        .fetch_one(&mut *transaction)
+        .await?;
 
         sqlx::query(
             r#"
@@ -131,10 +125,7 @@ impl ReleaseRepository {
 
         Ok(release)
     }
-    pub async fn find_by_id(
-        &self,
-        release_id: Uuid,
-    ) -> Result<Option<Release>, sqlx::Error> {
+    pub async fn find_by_id(&self, release_id: Uuid) -> Result<Option<Release>, sqlx::Error> {
         sqlx::query_as::<_, Release>(
             r#"
             SELECT
@@ -158,10 +149,7 @@ impl ReleaseRepository {
         .await
     }
 
-    pub async fn find_all_by_project(
-        &self,
-        project_id: Uuid,
-    ) -> Result<Vec<Release>, sqlx::Error> {
+    pub async fn find_all_by_project(&self, project_id: Uuid) -> Result<Vec<Release>, sqlx::Error> {
         sqlx::query_as::<_, Release>(
             r#"
             SELECT
@@ -189,14 +177,8 @@ impl ReleaseRepository {
     pub async fn transitions(
         &self,
         release_id: Uuid,
-    ) -> Result<
-        Vec<ReleaseStateTransition>,
-        sqlx::Error,
-    > {
-        sqlx::query_as::<
-            _,
-            ReleaseStateTransition,
-        >(
+    ) -> Result<Vec<ReleaseStateTransition>, sqlx::Error> {
+        sqlx::query_as::<_, ReleaseStateTransition>(
             r#"
             SELECT
                 id,
