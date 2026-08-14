@@ -6,6 +6,7 @@ pub mod environments;
 pub mod health;
 pub mod project_inspections;
 pub mod projects;
+pub mod releases;
 
 pub fn configure(config: &mut web::ServiceConfig) {
     let json_config = web::JsonConfig::default().error_handler(|error, _request| {
@@ -21,8 +22,9 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .app_data(json_config)
             .app_data(path_config)
             .service(health::health)
-            .configure(projects::configure)
             .configure(project_inspections::configure)
+            .configure(releases::configure)
+            .configure(projects::configure)
             .configure(environments::configure),
     );
 }

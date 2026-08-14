@@ -110,4 +110,20 @@ impl ProjectInspectionRepository {
         .fetch_optional(&self.pool)
         .await
     }
+
+    pub async fn find_by_id(
+        &self,
+        inspection_id: Uuid,
+    ) -> Result<Option<ProjectInspection>, sqlx::Error> {
+        sqlx::query_as::<_, ProjectInspection>(
+            r#"
+            SELECT *
+            FROM project_inspections
+            WHERE id = $1
+            "#,
+        )
+        .bind(inspection_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
 }

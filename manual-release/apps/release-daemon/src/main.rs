@@ -10,11 +10,13 @@ use release_daemon::{
         environment_repository::EnvironmentRepository,
         project_inspection_repository::ProjectInspectionRepository,
         project_repository::ProjectRepository,
+        release_repository::ReleaseRepository,
     },
     routes,
     services::{
         environment_service::EnvironmentService,
         project_inspection_service::ProjectInspectionService, project_service::ProjectService,
+        release_service::ReleaseService,
     },
 };
 
@@ -42,6 +44,8 @@ async fn main() -> anyhow::Result<()> {
     let project_inspector = ProjectInspector::new(command_executor);
 
     let inspection_repository = ProjectInspectionRepository::new(pool.clone());
+    let inspection_repository_clone = inspection_repository.clone();
+
     let project_inspection_service = ProjectInspectionService::new(
         project_repository.clone(),
         inspection_repository,
@@ -52,11 +56,19 @@ async fn main() -> anyhow::Result<()> {
     let environment_service =
         EnvironmentService::new(environment_repository, project_repository.clone());
 
+    let release_repository = ReleaseRepository::new(pool.clone());
+    let release_service = ReleaseService::new(
+        project_repository.clone(),
+        inspection_repository_clone,
+        release_repository,
+    );
+
     let state = web::Data::new(AppState {
         pool,
         project_service,
         project_inspection_service,
         environment_service,
+        release_service,
     });
 
     let bind_address = format!("{}:{}", config.backend_host, config.backend_port);
