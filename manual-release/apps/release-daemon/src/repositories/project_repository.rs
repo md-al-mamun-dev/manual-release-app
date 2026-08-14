@@ -101,6 +101,23 @@ impl ProjectRepository {
         .await
     }
 
+    pub async fn exists(&self, project_id: Uuid) -> Result<bool, sqlx::Error> {
+        let count: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(1)
+            FROM projects
+            WHERE
+                id = $1
+                AND archived_at IS NULL
+            "#,
+        )
+        .bind(project_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(count.0 > 0)
+    }
+
     pub async fn update(
         &self,
         project_id: Uuid,

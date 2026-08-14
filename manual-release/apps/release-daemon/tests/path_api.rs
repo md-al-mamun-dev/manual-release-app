@@ -4,11 +4,13 @@ use release_daemon::{
     executor::command_executor::CommandExecutor,
     inspection::project_inspector::ProjectInspector,
     repositories::{
+        environment_repository::EnvironmentRepository,
         project_inspection_repository::ProjectInspectionRepository,
         project_repository::ProjectRepository,
     },
     routes,
     services::{
+        environment_service::EnvironmentService,
         project_inspection_service::ProjectInspectionService, project_service::ProjectService,
     },
 };
@@ -22,13 +24,21 @@ fn create_state(pool: PgPool) -> web::Data<AppState> {
     let project_inspector = ProjectInspector::new(command_executor);
 
     let inspection_repository = ProjectInspectionRepository::new(pool.clone());
-    let project_inspection_service =
-        ProjectInspectionService::new(project_repository, inspection_repository, project_inspector);
+    let project_inspection_service = ProjectInspectionService::new(
+        project_repository.clone(),
+        inspection_repository,
+        project_inspector,
+    );
+
+    let environment_repository = EnvironmentRepository::new(pool.clone());
+    let environment_service =
+        EnvironmentService::new(environment_repository, project_repository.clone());
 
     web::Data::new(AppState {
         pool,
         project_service,
         project_inspection_service,
+        environment_service,
     })
 }
 
@@ -42,5 +52,5 @@ async fn project_invalid_uuid(pool: PgPool) {
         .to_request();
 
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
