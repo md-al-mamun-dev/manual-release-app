@@ -125,6 +125,54 @@ impl ReleaseRepository {
 
         Ok(release)
     }
+
+    pub async fn transition_status(
+        &self,
+        release_id: Uuid,
+        from_status: &str,
+        to_status: &str,
+        actor: &str,
+        reason: &str,
+    ) -> Result<(), sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+
+        sqlx::query!(
+            r#"
+            UPDATE releases
+            SET status = $1, updated_at = NOW()
+            WHERE id = $2 AND status = $3
+            "#,
+            to_status,
+            release_id,
+            from_status
+        )
+        .execute(&mut *transaction)
+        .await?;
+
+        sqlx::query!(
+            r#"
+            INSERT INTO release_state_transitions (
+                release_id,
+                from_status,
+                to_status,
+                actor,
+                reason,
+                metadata
+            )
+            VALUES ($1, $2, $3, $4, $5, '{}'::jsonb)
+            "#,
+            release_id,
+            from_status,
+            to_status,
+            actor,
+            reason
+        )
+        .execute(&mut *transaction)
+        .await?;
+
+        transaction.commit().await?;
+        Ok(())
+    }
     pub async fn find_by_id(&self, release_id: Uuid) -> Result<Option<Release>, sqlx::Error> {
         sqlx::query_as::<_, Release>(
             r#"

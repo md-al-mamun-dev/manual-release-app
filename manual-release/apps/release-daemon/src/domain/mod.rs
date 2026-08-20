@@ -1,4 +1,5 @@
 pub mod environment;
+pub mod job;
 pub mod project;
 pub mod project_inspection;
 pub mod release;

@@ -6,7 +6,7 @@ use serde_json::Value;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitInspection {
     pub commit: String,
@@ -14,7 +14,7 @@ pub struct GitInspection {
     pub dirty: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeInspection {
     pub package_manager_field: Option<String>,
@@ -24,7 +24,7 @@ pub struct NodeInspection {
     pub scripts: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectInspectionReport {
     pub repository_path: String,
@@ -48,7 +48,7 @@ pub struct ProjectInspectionReport {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, Serialize, FromRow, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectInspection {
     pub id: Uuid,

@@ -1,4 +1,6 @@
 use actix_web::{App, HttpServer, middleware, web};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use release_daemon::{
     app_state::AppState,
@@ -6,6 +8,7 @@ use release_daemon::{
     db,
     executor::command_executor::CommandExecutor,
     inspection::project_inspector::ProjectInspector,
+    openapi::ApiDoc,
     repositories::{
         environment_repository::EnvironmentRepository,
         project_inspection_repository::ProjectInspectionRepository,
@@ -17,7 +20,9 @@ use release_daemon::{
         project_inspection_service::ProjectInspectionService, project_service::ProjectService,
         release_service::ReleaseService,
     },
+    worker::JobWorker,
 };
+use tokio_util::sync::CancellationToken;
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
@@ -77,15 +82,41 @@ async fn main() -> anyhow::Result<()> {
         "starting release daemon"
     );
 
-    HttpServer::new(move || {
+    let cancel_token = CancellationToken::new();
+    let worker = JobWorker::new(cancel_token.clone());
+    let worker_handle = tokio::spawn(async move {
+        worker.run().await;
+    });
+
+    let server = HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
             .wrap(middleware::Logger::default())
             .configure(routes::configure)
+            .service(
+                SwaggerUi::new("/swagger-ui/{_:.*}")
+                    .url("/api-docs/openapi.json", ApiDoc::openapi()),
+            )
     })
+    .disable_signals()
     .bind(&bind_address)?
-    .run()
-    .await?;
+    .run();
+
+    let server_handle = server.handle();
+    let server_task = tokio::spawn(server);
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("received SIGINT (ctrl-c), shutting down");
+        }
+    }
+
+    tracing::info!("initiating graceful shutdown...");
+    cancel_token.cancel();
+    server_handle.stop(true).await;
+
+    let _ = tokio::join!(worker_handle, server_task);
+    tracing::info!("shutdown complete");
 
     Ok(())
 }

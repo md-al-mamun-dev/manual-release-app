@@ -3,10 +3,21 @@ use uuid::Uuid;
 
 use crate::{
     app_state::AppState,
-    domain::environment::{CreateEnvironmentRequest, UpdateEnvironmentRequest},
+    domain::environment::{CreateEnvironmentRequest, Environment, UpdateEnvironmentRequest},
     error::ApiError,
 };
 
+#[utoipa::path(
+    post,
+    path = "/api/projects/{project_id}/environments",
+    params(
+        ("project_id" = Uuid, Path, description = "Project ID")
+    ),
+    request_body = CreateEnvironmentRequest,
+    responses(
+        (status = 201, description = "Environment created", body = Environment)
+    )
+)]
 async fn create_environment(
     state: web::Data<AppState>,
     project_id: web::Path<Uuid>,
@@ -20,6 +31,16 @@ async fn create_environment(
     Ok(HttpResponse::Created().json(environment))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/projects/{project_id}/environments",
+    params(
+        ("project_id" = Uuid, Path, description = "Project ID")
+    ),
+    responses(
+        (status = 200, description = "List project environments", body = [Environment])
+    )
+)]
 async fn list_environments(
     state: web::Data<AppState>,
     project_id: web::Path<Uuid>,
@@ -32,6 +53,16 @@ async fn list_environments(
     Ok(HttpResponse::Ok().json(environments))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/environments/{environment_id}",
+    params(
+        ("environment_id" = Uuid, Path, description = "Environment ID")
+    ),
+    responses(
+        (status = 200, description = "Get environment by ID", body = Environment)
+    )
+)]
 async fn get_environment(
     state: web::Data<AppState>,
     environment_id: web::Path<Uuid>,
@@ -44,6 +75,17 @@ async fn get_environment(
     Ok(HttpResponse::Ok().json(environment))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/environments/{environment_id}",
+    params(
+        ("environment_id" = Uuid, Path, description = "Environment ID")
+    ),
+    request_body = UpdateEnvironmentRequest,
+    responses(
+        (status = 200, description = "Update environment", body = Environment)
+    )
+)]
 async fn update_environment(
     state: web::Data<AppState>,
     environment_id: web::Path<Uuid>,
@@ -57,6 +99,16 @@ async fn update_environment(
     Ok(HttpResponse::Ok().json(environment))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/environments/{environment_id}",
+    params(
+        ("environment_id" = Uuid, Path, description = "Environment ID")
+    ),
+    responses(
+        (status = 204, description = "Archive environment")
+    )
+)]
 async fn archive_environment(
     state: web::Data<AppState>,
     environment_id: web::Path<Uuid>,

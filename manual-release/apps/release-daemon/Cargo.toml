@@ -6,13 +6,18 @@ edition = "2024"
 [dependencies]
 actix-web = "4"
 anyhow = "1.0.104"
+async-trait = "0.1.92"
 chrono = { version = "0.4.45", features = ["serde"] }
 dotenvy = "0.15.7"
+nix = { version = "0.31.3", features = ["signal"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["process", "time", "io-util"] }
+tokio = { version = "1.53.1", features = ["process", "time", "io-util", "macros"] }
+tokio-util = "0.7.19"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+utoipa = { version = "5.5.0", features = ["actix_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"] }
 uuid = { version = "1.10.0", features = ["v4", "serde"] }

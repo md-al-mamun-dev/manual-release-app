@@ -3,7 +3,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: Uuid,
@@ -23,7 +23,7 @@ pub struct Project {
     pub archived_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateProjectRequest {
     pub name: String,
@@ -35,7 +35,7 @@ pub struct CreateProjectRequest {
     pub default_branch: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateProjectRequest {
     pub name: Option<String>,

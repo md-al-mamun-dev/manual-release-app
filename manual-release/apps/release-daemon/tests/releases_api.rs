@@ -116,7 +116,7 @@ async fn successful_release(pool: PgPool) {
 
     let req = test::TestRequest::post()
         .uri(&format!("/api/projects/{}/releases", project.id))
-        .set_json(&json!({
+        .set_json(json!({
             "version": "v1.0.0",
             "inspectionId": inspection_id,
         }))
@@ -134,7 +134,7 @@ async fn successful_release(pool: PgPool) {
         "abcdef1234567890abcdef123456789012345678"
     );
     assert_eq!(release.git_branch.as_deref(), Some("main"));
-    assert_eq!(release.source_dirty, false);
+    assert!(!release.source_dirty);
     assert_eq!(release.status, ReleaseStatus::Created.as_db_str());
 
     let req = test::TestRequest::get()
@@ -160,7 +160,7 @@ async fn duplicate_release_version(pool: PgPool) {
 
     let req1 = test::TestRequest::post()
         .uri(&format!("/api/projects/{}/releases", project.id))
-        .set_json(&json!({
+        .set_json(json!({
             "version": "v1.0.0",
             "inspectionId": inspection_id,
         }))
@@ -170,7 +170,7 @@ async fn duplicate_release_version(pool: PgPool) {
 
     let req2 = test::TestRequest::post()
         .uri(&format!("/api/projects/{}/releases", project.id))
-        .set_json(&json!({
+        .set_json(json!({
             "version": "v1.0.0",
             "inspectionId": inspection_id,
         }))
@@ -189,7 +189,7 @@ async fn dirty_inspection_rejected(pool: PgPool) {
 
     let req = test::TestRequest::post()
         .uri(&format!("/api/projects/{}/releases", project.id))
-        .set_json(&json!({
+        .set_json(json!({
             "version": "v1.0.0",
             "inspectionId": inspection_id,
         }))
@@ -209,7 +209,7 @@ async fn failed_inspection_rejected(pool: PgPool) {
 
     let req = test::TestRequest::post()
         .uri(&format!("/api/projects/{}/releases", project.id))
-        .set_json(&json!({
+        .set_json(json!({
             "version": "v1.0.0",
             "inspectionId": inspection_id,
         }))
@@ -231,7 +231,7 @@ async fn wrong_project_inspection_rejected(pool: PgPool) {
 
     let req = test::TestRequest::post()
         .uri(&format!("/api/projects/{}/releases", project2.id))
-        .set_json(&json!({
+        .set_json(json!({
             "version": "v1.0.0",
             "inspectionId": inspection_id,
         }))
@@ -250,7 +250,7 @@ async fn unknown_inspection_rejected(pool: PgPool) {
 
     let req = test::TestRequest::post()
         .uri(&format!("/api/projects/{}/releases", project.id))
-        .set_json(&json!({
+        .set_json(json!({
             "version": "v1.0.0",
             "inspectionId": Uuid::new_v4(),
         }))
@@ -276,7 +276,7 @@ async fn archived_project_rejected(pool: PgPool) {
 
     let req = test::TestRequest::post()
         .uri(&format!("/api/projects/{}/releases", project.id))
-        .set_json(&json!({
+        .set_json(json!({
             "version": "v1.0.0",
             "inspectionId": inspection_id,
         }))
@@ -284,4 +284,145 @@ async fn archived_project_rejected(pool: PgPool) {
 
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn list_releases(pool: PgPool) {
+    let state = create_state(pool.clone());
+    let app = test::init_service(App::new().app_data(state).configure(routes::configure)).await;
+
+    let project = setup_project!(app, "List Test");
+    let inspection_id = create_inspection(&pool, project.id, "SUCCEEDED", Some(false)).await;
+
+    let req = test::TestRequest::post()
+        .uri(&format!("/api/projects/{}/releases", project.id))
+        .set_json(json!({
+            "version": "v1.0.0",
+            "inspectionId": inspection_id,
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let req2 = test::TestRequest::post()
+        .uri(&format!("/api/projects/{}/releases", project.id))
+        .set_json(json!({
+            "version": "v1.1.0",
+            "inspectionId": inspection_id,
+        }))
+        .to_request();
+    let resp2 = test::call_service(&app, req2).await;
+    assert_eq!(resp2.status(), StatusCode::CREATED);
+
+    let req = test::TestRequest::get()
+        .uri(&format!("/api/projects/{}/releases", project.id))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let releases: Vec<Release> = test::read_body_json(resp).await;
+    assert_eq!(releases.len(), 2);
+    assert!(releases.iter().any(|r| r.version == "v1.0.0"));
+    assert!(releases.iter().any(|r| r.version == "v1.1.0"));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn get_single_release(pool: PgPool) {
+    let state = create_state(pool.clone());
+    let app = test::init_service(App::new().app_data(state).configure(routes::configure)).await;
+
+    let project = setup_project!(app, "Get Test");
+    let inspection_id = create_inspection(&pool, project.id, "SUCCEEDED", Some(false)).await;
+
+    let req = test::TestRequest::post()
+        .uri(&format!("/api/projects/{}/releases", project.id))
+        .set_json(json!({
+            "version": "v1.0.0",
+            "inspectionId": inspection_id,
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let req2 = test::TestRequest::post()
+        .uri(&format!("/api/projects/{}/releases", project.id))
+        .set_json(json!({
+            "version": "v1.1.0",
+            "inspectionId": inspection_id,
+        }))
+        .to_request();
+    let resp2 = test::call_service(&app, req2).await;
+    assert_eq!(resp2.status(), StatusCode::CREATED);
+    let created: Release = test::read_body_json(resp).await;
+
+    let req = test::TestRequest::get()
+        .uri(&format!("/api/releases/{}", created.id))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let fetched: Release = test::read_body_json(resp).await;
+    assert_eq!(fetched.id, created.id);
+    assert_eq!(fetched.project_id, project.id);
+    assert_eq!(fetched.version, "v1.0.0");
+    assert_eq!(
+        fetched.git_commit,
+        "abcdef1234567890abcdef123456789012345678"
+    );
+    assert_eq!(fetched.source_inspection_id, Some(inspection_id));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn unknown_release_rejected(pool: PgPool) {
+    let state = create_state(pool.clone());
+    let app = test::init_service(App::new().app_data(state).configure(routes::configure)).await;
+
+    let req = test::TestRequest::get()
+        .uri(&format!("/api/releases/{}", Uuid::new_v4()))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn releases_isolated_by_project(pool: PgPool) {
+    let state = create_state(pool.clone());
+    let app = test::init_service(App::new().app_data(state).configure(routes::configure)).await;
+
+    let project1 = setup_project!(app, "Project 1");
+    let project2 = setup_project!(app, "Project 2");
+
+    let inspection_id1 = create_inspection(&pool, project1.id, "SUCCEEDED", Some(false)).await;
+
+    // Create release for project 1
+    let req = test::TestRequest::post()
+        .uri(&format!("/api/projects/{}/releases", project1.id))
+        .set_json(json!({
+            "version": "v1.0.0",
+            "inspectionId": inspection_id1,
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // List releases for project 2 - should be empty
+    let req = test::TestRequest::get()
+        .uri(&format!("/api/projects/{}/releases", project2.id))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let releases: Vec<Release> = test::read_body_json(resp).await;
+    assert!(releases.is_empty());
+
+    // List releases for project 1 - should contain the release
+    let req = test::TestRequest::get()
+        .uri(&format!("/api/projects/{}/releases", project1.id))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let releases1: Vec<Release> = test::read_body_json(resp).await;
+    assert!(!releases1.is_empty());
+    assert!(releases1.iter().all(|r| r.project_id == project1.id));
 }

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ReleaseStatus {
     Created,
@@ -49,7 +49,7 @@ impl ReleaseStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Release {
     pub id: Uuid,
@@ -75,14 +75,14 @@ pub struct Release {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateReleaseRequest {
     pub version: String,
     pub inspection_id: Uuid,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReleaseStateTransition {
     pub id: i64,

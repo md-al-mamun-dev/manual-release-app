@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::{
     app_state::AppState,
-    domain::project::{CreateProjectRequest, UpdateProjectRequest},
+    domain::project::{CreateProjectRequest, Project, UpdateProjectRequest},
     error::ApiError,
 };
 
@@ -18,6 +18,14 @@ pub fn configure(config: &mut web::ServiceConfig) {
     );
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/projects",
+    request_body = CreateProjectRequest,
+    responses(
+        (status = 201, description = "Project created", body = Project)
+    )
+)]
 async fn create_project(
     state: web::Data<AppState>,
     body: web::Json<CreateProjectRequest>,
@@ -27,12 +35,29 @@ async fn create_project(
     Ok(HttpResponse::Created().json(project))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/projects",
+    responses(
+        (status = 200, description = "List all projects", body = [Project])
+    )
+)]
 async fn list_projects(state: web::Data<AppState>) -> Result<HttpResponse, ApiError> {
     let projects = state.project_service.list().await?;
 
     Ok(HttpResponse::Ok().json(projects))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/projects/{project_id}",
+    params(
+        ("project_id" = Uuid, Path, description = "Project ID")
+    ),
+    responses(
+        (status = 200, description = "Get project by ID", body = Project)
+    )
+)]
 async fn get_project(
     state: web::Data<AppState>,
     project_id: web::Path<Uuid>,
@@ -42,6 +67,17 @@ async fn get_project(
     Ok(HttpResponse::Ok().json(project))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/projects/{project_id}",
+    params(
+        ("project_id" = Uuid, Path, description = "Project ID")
+    ),
+    request_body = UpdateProjectRequest,
+    responses(
+        (status = 200, description = "Update project by ID", body = Project)
+    )
+)]
 async fn update_project(
     state: web::Data<AppState>,
     project_id: web::Path<Uuid>,
@@ -55,6 +91,16 @@ async fn update_project(
     Ok(HttpResponse::Ok().json(project))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/projects/{project_id}",
+    params(
+        ("project_id" = Uuid, Path, description = "Project ID")
+    ),
+    responses(
+        (status = 204, description = "Archive project by ID")
+    )
+)]
 async fn archive_project(
     state: web::Data<AppState>,
     project_id: web::Path<Uuid>,
