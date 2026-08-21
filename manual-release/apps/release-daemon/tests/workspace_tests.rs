@@ -1,5 +1,6 @@
 use release_daemon::{
-    domain::release::Release, runner::context::RunnerExecutionContext, runner::mock_runner::MockRunner, runner::Runner, services::source_validation_service::SourceValidationService,
+    domain::release::Release, runner::Runner, runner::context::RunnerExecutionContext,
+    runner::mock_runner::MockRunner, services::source_validation_service::SourceValidationService,
 };
 use sqlx::PgPool;
 use std::process::Command;

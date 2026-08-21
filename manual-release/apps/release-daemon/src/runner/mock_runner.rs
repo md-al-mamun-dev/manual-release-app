@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tokio::fs;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::{Runner, RunnerError, RunnerState};
@@ -13,6 +13,9 @@ pub struct MockRunner {
     workspace_path: PathBuf,
     state: RunnerState,
     executor: ProcessExecutor,
+    fail_create: bool,
+    fail_prepare: bool,
+    fail_cleanup: bool,
 }
 
 impl MockRunner {
@@ -21,13 +24,36 @@ impl MockRunner {
             workspace_path,
             state: RunnerState::Creating,
             executor: ProcessExecutor::new(10 * 1024 * 1024, Duration::from_secs(5)),
+            fail_create: false,
+            fail_prepare: false,
+            fail_cleanup: false,
         }
+    }
+
+    pub fn with_fail_create(mut self) -> Self {
+        self.fail_create = true;
+        self
+    }
+
+    pub fn with_fail_prepare(mut self) -> Self {
+        self.fail_prepare = true;
+        self
+    }
+
+    pub fn with_fail_cleanup(mut self) -> Self {
+        self.fail_cleanup = true;
+        self
     }
 }
 
 #[async_trait::async_trait]
 impl Runner for MockRunner {
     async fn create(&mut self) -> Result<(), RunnerError> {
+        if self.fail_create {
+            return Err(RunnerError::CreationFailed(
+                "Simulated create failure".into(),
+            ));
+        }
         fs::create_dir_all(&self.workspace_path)
             .await
             .map_err(|e| RunnerError::CreationFailed(e.to_string()))?;
@@ -36,6 +62,11 @@ impl Runner for MockRunner {
     }
 
     async fn prepare(&mut self) -> Result<(), RunnerError> {
+        if self.fail_prepare {
+            return Err(RunnerError::PreparationFailed(
+                "Simulated prepare failure".into(),
+            ));
+        }
         self.state = RunnerState::Running;
         Ok(())
     }
@@ -54,11 +85,14 @@ impl Runner for MockRunner {
         output_sender: Option<mpsc::Sender<(String, String)>>,
     ) -> Result<ProcessResult, RunnerError> {
         if self.state != RunnerState::Running {
-            return Err(RunnerError::ExecutionFailed("Runner is not in Running state".into()));
+            return Err(RunnerError::ExecutionFailed(
+                "Runner is not in Running state".into(),
+            ));
         }
 
         // We use ProcessExecutor to run local commands, but we skip uname/node validations
-        Ok(self.executor
+        Ok(self
+            .executor
             .execute(
                 program,
                 args,
@@ -72,6 +106,11 @@ impl Runner for MockRunner {
     }
 
     async fn cleanup(&mut self) -> Result<(), RunnerError> {
+        if self.fail_cleanup {
+            return Err(RunnerError::CleanupFailed(
+                "Simulated cleanup failure".into(),
+            ));
+        }
         self.state = RunnerState::CleaningUp;
         Ok(())
     }

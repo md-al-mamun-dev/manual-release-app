@@ -1,9 +1,11 @@
 use sqlx::PgPool;
+use std::path::Path;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::domain::job::{append_job_event, fail_job, fail_step, succeed_step};
 use crate::repositories::release_repository::ReleaseRepository;
+use crate::runner::Runner;
 use crate::runner::context::RunnerExecutionContext;
 use crate::runner::manager::RunnerManager;
 use crate::services::node_ci_service::NodeCiService;
@@ -39,6 +41,9 @@ impl PrepareReleaseExecutor {
         validate_step_id: Uuid,
         cancel_token: CancellationToken,
     ) -> Result<(), String> {
+        let release_repo = ReleaseRepository::new(self.pool.clone());
+        let mut current_status = "CREATED".to_string();
+
         let _ = append_job_event(
             &self.pool,
             job_id,
@@ -61,26 +66,97 @@ impl PrepareReleaseExecutor {
 
         let workspace_path = self.workspace_manager.get_workspace_path(job_id);
 
-        let release_repo = ReleaseRepository::new(self.pool.clone());
-
         let mut runner = match self.runner_manager.create_runner(workspace_path.clone()) {
             Ok(r) => r,
             Err(e) => {
                 let error_msg = format!("Failed to create runner: {}", e);
                 let _ = fail_job(&self.pool, job_id, "RUNNER_ERROR", &error_msg).await;
+                let _ = release_repo
+                    .transition_status(release_id, &current_status, "FAILED", "SYSTEM", &error_msg)
+                    .await;
                 return Err(error_msg);
             }
         };
 
-        let _ = append_job_event(
-            &self.pool,
-            job_id,
-            None,
-            "SYSTEM",
-            "INFO",
-            "Runner created",
-        )
-        .await;
+        // Use tokio::select! to race the inner execution against the cancellation token
+        let execution_result = tokio::select! {
+            res = self.execute_ci_pipeline(
+                runner.as_mut(),
+                job_id,
+                release_id,
+                validate_step_id,
+                cancel_token.clone(),
+                &workspace_path,
+                &mut current_status,
+                &release_repo,
+            ) => res,
+            _ = cancel_token.cancelled() => {
+                let error_msg = "Job cancelled by user".to_string();
+                let _ = fail_job(&self.pool, job_id, "CANCELLED", &error_msg).await;
+                Err(error_msg)
+            }
+        };
+
+        // Guaranteed cleanup block (finally)
+        if let Err(e) = runner.cleanup().await {
+            let _ = append_job_event(
+                &self.pool,
+                job_id,
+                None,
+                "SYSTEM",
+                "ERROR",
+                &format!("Runner cleanup failed: {}", e),
+            )
+            .await;
+        }
+
+        if let Err(e) = runner.destroy().await {
+            let _ = append_job_event(
+                &self.pool,
+                job_id,
+                None,
+                "SYSTEM",
+                "ERROR",
+                &format!("Runner destroy failed: {}", e),
+            )
+            .await;
+        } else {
+            let _ = append_job_event(
+                &self.pool,
+                job_id,
+                None,
+                "SYSTEM",
+                "INFO",
+                "Runner cleaned up and destroyed",
+            )
+            .await;
+        }
+
+        match execution_result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let _ = release_repo
+                    .transition_status(release_id, &current_status, "FAILED", "SYSTEM", &e)
+                    .await;
+                Err(e)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_ci_pipeline(
+        &self,
+        runner: &mut dyn Runner,
+        job_id: Uuid,
+        release_id: Uuid,
+        validate_step_id: Uuid,
+        cancel_token: CancellationToken,
+        workspace_path: &Path,
+        current_status: &mut String,
+        release_repo: &ReleaseRepository,
+    ) -> Result<(), String> {
+        let _ =
+            append_job_event(&self.pool, job_id, None, "SYSTEM", "INFO", "Runner created").await;
 
         if let Err(e) = runner.create().await {
             let error_msg = format!("Failed to initialize runner: {}", e);
@@ -104,7 +180,7 @@ impl PrepareReleaseExecutor {
         )
         .await;
 
-        let context = RunnerExecutionContext::new(runner.as_ref(), cancel_token.clone());
+        let context = RunnerExecutionContext::new(runner, cancel_token.clone());
 
         match self
             .validation_service
@@ -112,6 +188,11 @@ impl PrepareReleaseExecutor {
             .await
         {
             Ok(_) => {
+                // Source validation service no longer needs to transition the status
+                // but since it still does, we'll update our tracker to match it.
+                // Wait, it is better to track it here.
+                *current_status = "SOURCE_VALIDATED".to_string();
+
                 let _ = append_job_event(
                     &self.pool,
                     job_id,
@@ -137,58 +218,33 @@ impl PrepareReleaseExecutor {
                 let _ = release_repo
                     .transition_status(
                         release_id,
-                        "CREATED", // Note: Source validation used to transition this to SOURCE_VALIDATED
-                        "SOURCE_VALIDATED",
-                        "SYSTEM",
-                        "Source validation passed",
-                    )
-                    .await;
-
-                let _ = release_repo
-                    .transition_status(
-                        release_id,
-                        "SOURCE_VALIDATED",
+                        current_status,
                         "CI_RUNNING",
                         "SYSTEM",
                         "Starting CI",
                     )
                     .await;
 
+                *current_status = "CI_RUNNING".to_string();
+
                 let node_ci = NodeCiService::new(self.pool.clone());
                 let ci_result = node_ci
-                    .execute_ci(
-                        job_id,
-                        validate_step_id,
-                        &workspace_path,
-                        cancel_token,
-                        &context,
-                    )
+                    .execute_ci(job_id, validate_step_id, workspace_path, &context)
                     .await;
-
-                let _ = runner.cleanup().await;
-                let _ = runner.destroy().await;
-
-                let _ = append_job_event(
-                    &self.pool,
-                    job_id,
-                    None,
-                    "SYSTEM",
-                    "INFO",
-                    "Runner cleaned up and destroyed",
-                )
-                .await;
 
                 match ci_result {
                     Ok(_) => {
                         let _ = release_repo
                             .transition_status(
                                 release_id,
-                                "CI_RUNNING",
+                                current_status,
                                 "CI_PASSED",
                                 "SYSTEM",
                                 "CI Passed",
                             )
                             .await;
+
+                        *current_status = "CI_PASSED".to_string();
 
                         // Simulate remaining steps
                         let simulated_steps = vec![
@@ -215,15 +271,6 @@ impl PrepareReleaseExecutor {
                     }
                     Err(e) => {
                         let error_msg = e.to_string();
-                        let _ = release_repo
-                            .transition_status(
-                                release_id,
-                                "CI_RUNNING",
-                                "FAILED",
-                                "SYSTEM",
-                                &error_msg,
-                            )
-                            .await;
                         let _ = fail_job(&self.pool, job_id, "CI_FAILED", &error_msg).await;
                         Err(error_msg)
                     }

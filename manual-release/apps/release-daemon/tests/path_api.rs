@@ -44,11 +44,12 @@ fn create_state(pool: PgPool) -> web::Data<AppState> {
     );
 
     web::Data::new(AppState {
-        pool,
+        pool: pool.clone(),
         project_service,
         project_inspection_service,
         environment_service,
         release_service,
+        build_config_service: release_daemon::services::project_build_config_service::ProjectBuildConfigService::new(project_repository.clone(), release_daemon::repositories::project_build_config_repository::ProjectBuildConfigRepository::new(pool.clone())),
     })
 }
 

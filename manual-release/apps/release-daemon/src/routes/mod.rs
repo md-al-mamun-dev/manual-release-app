@@ -4,6 +4,7 @@ use crate::error::ApiError;
 
 pub mod environments;
 pub mod health;
+pub mod project_build_configs;
 pub mod project_inspections;
 pub mod projects;
 pub mod releases;
@@ -25,6 +26,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .configure(project_inspections::configure)
             .configure(releases::configure)
             .configure(projects::configure)
+            .configure(project_build_configs::configure)
             .configure(environments::configure),
     );
 }

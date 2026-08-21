@@ -1,7 +1,5 @@
 use release_daemon::{
-    domain::job::{append_job_event, fail_job, fail_step, succeed_step},
-    repositories::release_repository::ReleaseRepository,
-    runner::{context::RunnerExecutionContext, mock_runner::MockRunner, Runner},
+    runner::{Runner, context::RunnerExecutionContext, mock_runner::MockRunner},
     services::node_ci_service::{NodeCiError, NodeCiService},
 };
 use sqlx::PgPool;
@@ -71,17 +69,11 @@ async fn test_node_ci_success_npm(pool: PgPool) {
     let mut runner = MockRunner::new(runner_workspace.clone());
     runner.create().await.unwrap();
     runner.prepare().await.unwrap();
-    
+
     let context = RunnerExecutionContext::new(&runner, cancel_token.clone());
 
     let result = service
-        .execute_ci(
-            job_id,
-            step_id,
-            &runner_workspace,
-            cancel_token,
-            &context,
-        )
+        .execute_ci(job_id, step_id, &runner_workspace, &context)
         .await;
     assert!(
         result.is_ok(),
@@ -131,17 +123,11 @@ async fn test_node_ci_multiple_lockfiles(pool: PgPool) {
     let mut runner = MockRunner::new(runner_workspace.clone());
     runner.create().await.unwrap();
     runner.prepare().await.unwrap();
-    
+
     let context = RunnerExecutionContext::new(&runner, cancel_token.clone());
 
     let result = service
-        .execute_ci(
-            job_id,
-            step_id,
-            &runner_workspace,
-            cancel_token,
-            &context,
-        )
+        .execute_ci(job_id, step_id, &runner_workspace, &context)
         .await;
 
     assert!(result.is_err());
@@ -176,17 +162,11 @@ async fn test_node_ci_script_failure(pool: PgPool) {
     let mut runner = MockRunner::new(runner_workspace.clone());
     runner.create().await.unwrap();
     runner.prepare().await.unwrap();
-    
+
     let context = RunnerExecutionContext::new(&runner, cancel_token.clone());
 
     let result = service
-        .execute_ci(
-            job_id,
-            step_id,
-            &runner_workspace,
-            cancel_token,
-            &context,
-        )
+        .execute_ci(job_id, step_id, &runner_workspace, &context)
         .await;
 
     assert!(result.is_err());

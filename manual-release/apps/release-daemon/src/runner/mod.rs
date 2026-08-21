@@ -1,5 +1,5 @@
 pub mod context;
-pub mod local_ubuntu;
+pub mod docker_ubuntu_runner;
 pub mod manager;
 pub mod mock_runner;
 
@@ -41,7 +41,7 @@ pub trait Runner: Send + Sync {
     async fn create(&mut self) -> Result<(), RunnerError>;
     async fn prepare(&mut self) -> Result<(), RunnerError>;
     async fn workspace(&self) -> PathBuf;
-    
+
     async fn execute(
         &self,
         program: &str,

@@ -32,6 +32,7 @@ pub struct ProjectInspectionReport {
     pub git: GitInspection,
 
     pub runtimes: Vec<String>,
+    pub frameworks: Vec<String>,
 
     pub package_manager: Option<String>,
 

@@ -47,6 +47,8 @@ impl ProjectInspector {
 
         let runtimes = detect_runtimes(&root);
 
+        let frameworks = detect_frameworks(&root, &node);
+
         let dockerfiles = detect_dockerfiles(&root);
 
         let compose_files = detect_compose_files(&root);
@@ -59,6 +61,8 @@ impl ProjectInspector {
             git,
 
             runtimes,
+
+            frameworks,
 
             package_manager,
 
@@ -141,6 +145,9 @@ fn detect_lockfiles(root: &Path) -> Vec<String> {
         "yarn.lock",
         "bun.lock",
         "bun.lockb",
+        "uv.lock",
+        "poetry.lock",
+        "Pipfile.lock",
     ]
     .iter()
     .filter(|name| is_regular_file(&root.join(name)))
@@ -162,6 +169,9 @@ fn detect_package_manager(lockfiles: &[String], warnings: &mut Vec<String>) -> O
         Some("pnpm-lock.yaml") => Some("pnpm".to_string()),
         Some("yarn.lock") => Some("yarn".to_string()),
         Some("bun.lock") | Some("bun.lockb") => Some("bun".to_string()),
+        Some("uv.lock") => Some("uv".to_string()),
+        Some("poetry.lock") => Some("poetry".to_string()),
+        Some("Pipfile.lock") => Some("pipenv".to_string()),
         _ => None,
     }
 }
@@ -224,6 +234,49 @@ fn detect_runtimes(root: &Path) -> Vec<String> {
     }
 
     runtimes
+}
+
+fn detect_frameworks(root: &Path, node: &Option<NodeInspection>) -> Vec<String> {
+    let mut frameworks = Vec::new();
+
+    // Node frameworks
+    if is_regular_file(&root.join("next.config.js"))
+        || is_regular_file(&root.join("next.config.mjs"))
+        || is_regular_file(&root.join("next.config.ts"))
+    {
+        frameworks.push("NEXTJS".to_string());
+    } else if is_regular_file(&root.join("nest-cli.json")) {
+        frameworks.push("NESTJS".to_string());
+    } else if let Some(_n) = node {
+        // Fallback to checking package.json if configs not found
+        // Since we didn't parse dependencies in NodeInspection originally,
+        // we can just check for existence of some files for Express if needed
+        // but let's rely on package.json parsing which is not passed to node.
+        // Wait, I added dependencies to PackageJson! But we don't pass them in NodeInspection.
+        // Let's just do file-based detection for now.
+    }
+
+    // Python frameworks
+    if is_regular_file(&root.join("requirements.txt")) {
+        let content = fs::read_to_string(root.join("requirements.txt")).unwrap_or_default();
+        if content.to_lowercase().contains("fastapi") {
+            frameworks.push("FASTAPI".to_string());
+        }
+    } else if is_regular_file(&root.join("pyproject.toml")) {
+        let content = fs::read_to_string(root.join("pyproject.toml")).unwrap_or_default();
+        if content.to_lowercase().contains("fastapi") {
+            frameworks.push("FASTAPI".to_string());
+        }
+    }
+
+    // Check for express just in case
+    let package_json_path = root.join("package.json");
+    if fs::read_to_string(&package_json_path).is_ok_and(|c| c.contains("\"express\"")) {
+        frameworks.push("EXPRESS".to_string());
+    }
+
+    frameworks.dedup();
+    frameworks
 }
 
 fn detect_dockerfiles(root: &Path) -> Vec<String> {

@@ -1,6 +1,8 @@
+pub mod build_config_validator;
 pub mod environment_service;
 pub mod environment_validation;
 pub mod node_ci_service;
+pub mod project_build_config_service;
 pub mod project_inspection_service;
 pub mod project_service;
 pub mod release_service;

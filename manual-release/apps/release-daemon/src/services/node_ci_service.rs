@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use sqlx::PgPool;
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
+
 use uuid::Uuid;
 
 use crate::domain::job::append_job_event;
@@ -45,77 +45,42 @@ impl NodeCiService {
         job_id: Uuid,
         step_id: Uuid,
         workspace_path: &Path,
-        cancel_token: CancellationToken,
         context: &RunnerExecutionContext<'_>,
     ) -> Result<(), NodeCiError> {
         let package_manager = self.detect_package_manager(context, workspace_path).await?;
         let scripts = self.parse_package_scripts(context, workspace_path).await?;
 
-        self.run_install(
-            job_id,
-            step_id,
-            context,
-            &package_manager,
-            cancel_token.clone(),
-        )
-        .await?;
+        self.run_install(job_id, step_id, context, &package_manager)
+            .await?;
 
         // LINT
         if scripts.contains_key("lint") {
-            self.run_script(
-                job_id,
-                step_id,
-                context,
-                &package_manager,
-                "lint",
-                cancel_token.clone(),
-            )
-            .await?;
+            self.run_script(job_id, step_id, context, &package_manager, "lint")
+                .await?;
         } else {
             self.log_skip(job_id, step_id, "LINT").await;
         }
 
         // TYPE_CHECK
         if scripts.contains_key("typecheck") {
-            self.run_script(
-                job_id,
-                step_id,
-                context,
-                &package_manager,
-                "typecheck",
-                cancel_token.clone(),
-            )
-            .await?;
+            self.run_script(job_id, step_id, context, &package_manager, "typecheck")
+                .await?;
         } else {
             self.log_skip(job_id, step_id, "TYPE_CHECK").await;
         }
 
         // TEST
         if scripts.contains_key("test") {
-            self.run_script(
-                job_id,
-                step_id,
-                context,
-                &package_manager,
-                "test",
-                cancel_token.clone(),
-            )
-            .await?;
+            self.run_script(job_id, step_id, context, &package_manager, "test")
+                .await?;
         } else {
             self.log_skip(job_id, step_id, "TEST").await;
         }
 
         // BUILD_APPLICATION
         if scripts.contains_key("build") {
-            self.run_script(
-                job_id,
-                step_id,
-                context,
-                &package_manager,
-                "build",
-                cancel_token.clone(),
-            )
-            .await?;
+            self.run_script(job_id, step_id, context, &package_manager, "build")
+                .await?;
         } else {
             self.log_skip(job_id, step_id, "BUILD_APPLICATION").await;
         }
@@ -132,7 +97,10 @@ impl NodeCiService {
         let res = context
             .execute(
                 "bash",
-                &["-c".to_string(), "ls package-lock.json pnpm-lock.yaml yarn.lock 2>/dev/null".to_string()],
+                &[
+                    "-c".to_string(),
+                    "ls package-lock.json pnpm-lock.yaml yarn.lock 2>/dev/null".to_string(),
+                ],
                 &empty_env,
                 Duration::from_secs(5),
                 None,
@@ -175,7 +143,9 @@ impl NodeCiService {
             .map_err(|e| NodeCiError::ExecutionFailed(e.to_string()))?;
 
         if !matches!(res.outcome, ProcessOutcome::Succeeded) {
-            return Err(NodeCiError::PackageJsonError("package.json not found".to_string()));
+            return Err(NodeCiError::PackageJsonError(
+                "package.json not found".to_string(),
+            ));
         }
 
         let package_json: PackageJson = serde_json::from_str(&res.stdout.text)
@@ -190,7 +160,6 @@ impl NodeCiService {
         step_id: Uuid,
         context: &RunnerExecutionContext<'_>,
         package_manager: &str,
-        cancel_token: CancellationToken,
     ) -> Result<(), NodeCiError> {
         let _ = append_job_event(
             &self.pool,
@@ -213,15 +182,8 @@ impl NodeCiService {
             }
         };
 
-        self.execute_command(
-            job_id,
-            step_id,
-            context,
-            package_manager,
-            &args,
-            cancel_token,
-        )
-        .await
+        self.execute_command(job_id, step_id, context, package_manager, &args)
+            .await
     }
 
     async fn run_script(
@@ -231,7 +193,6 @@ impl NodeCiService {
         context: &RunnerExecutionContext<'_>,
         package_manager: &str,
         script_name: &str,
-        cancel_token: CancellationToken,
     ) -> Result<(), NodeCiError> {
         let _ = append_job_event(
             &self.pool,
@@ -244,15 +205,8 @@ impl NodeCiService {
         .await;
 
         let args = vec!["run".to_string(), script_name.to_string()];
-        self.execute_command(
-            job_id,
-            step_id,
-            context,
-            package_manager,
-            &args,
-            cancel_token,
-        )
-        .await
+        self.execute_command(job_id, step_id, context, package_manager, &args)
+            .await
     }
 
     async fn log_skip(&self, job_id: Uuid, step_id: Uuid, step_name: &str) {
@@ -274,7 +228,6 @@ impl NodeCiService {
         context: &RunnerExecutionContext<'_>,
         program: &str,
         args: &[String],
-        cancel_token: CancellationToken,
     ) -> Result<(), NodeCiError> {
         let (tx, mut rx) = mpsc::channel::<(String, String)>(100);
         let pool = self.pool.clone();

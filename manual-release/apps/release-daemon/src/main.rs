@@ -11,12 +11,14 @@ use release_daemon::{
     openapi::ApiDoc,
     repositories::{
         environment_repository::EnvironmentRepository,
+        project_build_config_repository::ProjectBuildConfigRepository,
         project_inspection_repository::ProjectInspectionRepository,
         project_repository::ProjectRepository, release_repository::ReleaseRepository,
     },
     routes,
     services::{
         environment_service::EnvironmentService,
+        project_build_config_service::ProjectBuildConfigService,
         project_inspection_service::ProjectInspectionService, project_service::ProjectService,
         release_service::ReleaseService,
     },
@@ -67,12 +69,17 @@ async fn main() -> anyhow::Result<()> {
         release_repository,
     );
 
+    let build_config_repository = ProjectBuildConfigRepository::new(pool.clone());
+    let build_config_service =
+        ProjectBuildConfigService::new(project_repository.clone(), build_config_repository);
+
     let state = web::Data::new(AppState {
-        pool,
+        pool: pool.clone(),
         project_service,
         project_inspection_service,
         environment_service,
         release_service,
+        build_config_service,
     });
 
     let bind_address = format!("{}:{}", config.backend_host, config.backend_port);

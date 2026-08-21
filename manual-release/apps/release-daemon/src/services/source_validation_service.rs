@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use sqlx::PgPool;
-use tokio_util::sync::CancellationToken;
+
 use uuid::Uuid;
 
 use crate::domain::project::Project;
@@ -53,7 +53,7 @@ impl SourceValidationService {
 
     pub async fn validate_source(
         &self,
-        job_id: Uuid,
+        _job_id: Uuid,
         release_id: Uuid,
         context: &RunnerExecutionContext<'_>,
     ) -> Result<PathBuf, SourceValidationError> {
@@ -88,7 +88,12 @@ impl SourceValidationService {
         let is_inside_work_tree = context
             .execute(
                 "git",
-                &["-C".to_string(), project.repository_path.clone(), "rev-parse".to_string(), "--is-inside-work-tree".to_string()],
+                &[
+                    "-C".to_string(),
+                    project.repository_path.clone(),
+                    "rev-parse".to_string(),
+                    "--is-inside-work-tree".to_string(),
+                ],
                 &empty_env,
                 Duration::from_secs(10),
                 None,
@@ -125,7 +130,7 @@ impl SourceValidationService {
 
         // 6. Create isolated workspace
         let workspace_path = context.runner().workspace().await;
-        
+
         let clone_args = vec![
             "clone".to_string(),
             "--no-checkout".to_string(),
@@ -145,10 +150,16 @@ impl SourceValidationService {
             .map_err(|e| SourceValidationError::WorkspaceCreationFailed(e.to_string()))?;
 
         if !matches!(clone_result.outcome, ProcessOutcome::Succeeded) {
-            return Err(SourceValidationError::WorkspaceCreationFailed(clone_result.stderr.text));
+            return Err(SourceValidationError::WorkspaceCreationFailed(
+                clone_result.stderr.text,
+            ));
         }
 
-        let checkout_args = vec!["checkout".to_string(), "-q".to_string(), release.git_commit.clone()];
+        let checkout_args = vec![
+            "checkout".to_string(),
+            "-q".to_string(),
+            release.git_commit.clone(),
+        ];
         let checkout_result = context
             .execute(
                 "git",
@@ -161,7 +172,9 @@ impl SourceValidationService {
             .map_err(|e| SourceValidationError::WorkspaceCreationFailed(e.to_string()))?;
 
         if !matches!(checkout_result.outcome, ProcessOutcome::Succeeded) {
-            return Err(SourceValidationError::WorkspaceCreationFailed(checkout_result.stderr.text));
+            return Err(SourceValidationError::WorkspaceCreationFailed(
+                checkout_result.stderr.text,
+            ));
         }
 
         // 7. Verify workspace resolves exactly to release.git_commit

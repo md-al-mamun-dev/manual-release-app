@@ -1,8 +1,10 @@
 use sqlx::PgPool;
 
 use crate::services::{
-    environment_service::EnvironmentService, project_inspection_service::ProjectInspectionService,
-    project_service::ProjectService, release_service::ReleaseService,
+    environment_service::EnvironmentService,
+    project_build_config_service::ProjectBuildConfigService,
+    project_inspection_service::ProjectInspectionService, project_service::ProjectService,
+    release_service::ReleaseService,
 };
 
 #[derive(Clone)]
@@ -16,4 +18,6 @@ pub struct AppState {
     pub environment_service: EnvironmentService,
 
     pub release_service: ReleaseService,
+
+    pub build_config_service: ProjectBuildConfigService,
 }
