@@ -212,6 +212,10 @@ where
                     let keep = remaining.min(bytes_read);
                     retained.extend_from_slice(&chunk[..keep]);
                 }
+
+                if total_bytes > max_bytes {
+                    break;
+                }
             }
             Err(_) => break, // On error, just return what we have
         }

@@ -76,8 +76,24 @@ pub trait Runner: Send + Sync {
         report_output_path: &str,
         cancel_token: CancellationToken,
         output_sender: Option<mpsc::Sender<(String, String)>>,
-    ) -> Result<ProcessResult, RunnerError>;
+    ) -> Result<(ProcessResult, Option<String>), RunnerError>;
+
+    #[allow(clippy::too_many_arguments)]
+    async fn publish_image(
+        &self,
+        tar_path: &str,
+        registry: &str,
+        repository: &str,
+        tag: &str,
+        username: &str,
+        password: &str,
+        cancel_token: CancellationToken,
+        output_sender: Option<mpsc::Sender<(String, String)>>,
+    ) -> Result<(ProcessResult, Option<String>), RunnerError>;
 
     async fn cleanup(&mut self) -> Result<(), RunnerError>;
     async fn destroy(&mut self) -> Result<(), RunnerError>;
+
+    /// Spawns a detached task to guarantee cleanup even if the parent task drops
+    fn spawn_detached_cleanup(&self);
 }

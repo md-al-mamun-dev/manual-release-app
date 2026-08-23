@@ -74,7 +74,11 @@ async fn test_source_validation_success(pool: PgPool) {
     .unwrap();
 
     let workspace_root = format!("/tmp/workspace_root_{}", Uuid::new_v4());
-    let mut runner = MockRunner::new(std::path::PathBuf::from(&workspace_root));
+    let mut runner = MockRunner::new(
+        std::path::PathBuf::from(&workspace_root),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    );
     runner.create().await.unwrap();
     runner.prepare().await.unwrap();
 
@@ -145,7 +149,11 @@ async fn test_source_validation_invalid_sha(pool: PgPool) {
     .unwrap();
 
     let workspace_root = format!("/tmp/workspace_root_{}", Uuid::new_v4());
-    let mut runner = MockRunner::new(std::path::PathBuf::from(&workspace_root));
+    let mut runner = MockRunner::new(
+        std::path::PathBuf::from(&workspace_root),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    );
     runner.create().await.unwrap();
     runner.prepare().await.unwrap();
 

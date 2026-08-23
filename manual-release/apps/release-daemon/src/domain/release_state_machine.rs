@@ -26,8 +26,11 @@ pub fn can_transition(from: ReleaseStatus, to: ReleaseStatus) -> bool {
             | (SecurityScanning, Failed)
             | (ScanPassed, ImageApproved)
             | (ScanPassed, Failed)
-            | (ImageApproved, Published)
+            | (ImageApproved, Publishing)
             | (ImageApproved, Failed)
+            | (Publishing, Published)
+            | (Publishing, PublishFailed)
+            | (Publishing, Failed)
             | (Published, StagingDeploying)
             | (Published, Failed)
             | (StagingDeploying, StagingVerified)
@@ -40,6 +43,7 @@ pub fn can_transition(from: ReleaseStatus, to: ReleaseStatus) -> bool {
             | (ProductionDeploying, RollingBack)
             | (ProductionDeploying, Failed)
             | (Failed, RollingBack)
+            | (PublishFailed, RollingBack)
             | (RollingBack, RolledBack)
             | (RollingBack, RollbackFailed)
     )
@@ -83,7 +87,8 @@ mod tests {
         assert!(can_transition(SecurityScanning, ScanPassed));
         assert!(can_transition(SecurityScanning, SecurityFailed));
         assert!(can_transition(ScanPassed, ImageApproved));
-        assert!(can_transition(ImageApproved, Published));
+        assert!(can_transition(ImageApproved, Publishing));
+        assert!(can_transition(Publishing, Published));
     }
 
     #[test]
@@ -91,11 +96,12 @@ mod tests {
         assert!(!can_transition(ImageTested, ImageApproved));
         assert!(!can_transition(ImageTested, Published));
         assert!(!can_transition(ImageTested, ScanPassed));
-        assert!(!can_transition(SecurityScanning, ImageApproved));
+        assert!(!can_transition(SecurityScanning, Publishing));
         assert!(!can_transition(SecurityScanning, Published));
         assert!(!can_transition(SecurityFailed, ImageApproved));
         assert!(!can_transition(SecurityFailed, Published));
         assert!(!can_transition(ScanPassed, Published));
+        assert!(!can_transition(ScanPassed, Publishing));
     }
 
     #[test]
