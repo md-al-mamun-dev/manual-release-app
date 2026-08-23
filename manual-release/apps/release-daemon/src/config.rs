@@ -16,6 +16,15 @@ pub struct AppConfig {
     pub runner_cpus_limit: String,
     pub runner_pids_limit: String,
     pub runner_network_policy: String,
+    pub kaniko_memory_limit: String,
+    pub kaniko_cpus_limit: String,
+    pub kaniko_pids_limit: String,
+    pub max_image_tar_size: u64,
+    pub max_trivy_report_size: usize,
+    pub registry_url: String,
+    pub registry_repository: String,
+    pub registry_username: String,
+    pub registry_password: String,
 }
 
 impl AppConfig {
@@ -60,7 +69,30 @@ impl AppConfig {
         let runner_pids_limit = env::var("RUNNER_PIDS_LIMIT").unwrap_or_else(|_| "100".to_string());
 
         let runner_network_policy =
-            env::var("RUNNER_NETWORK_POLICY").unwrap_or_else(|_| "none".to_string());
+            env::var("RUNNER_NETWORK_POLICY").unwrap_or_else(|_| "bridge".to_string());
+
+        let kaniko_memory_limit =
+            env::var("KANIKO_MEMORY_LIMIT").unwrap_or_else(|_| "1024m".to_string());
+
+        let kaniko_cpus_limit = env::var("KANIKO_CPUS_LIMIT").unwrap_or_else(|_| "2.0".to_string());
+
+        let kaniko_pids_limit = env::var("KANIKO_PIDS_LIMIT").unwrap_or_else(|_| "200".to_string());
+
+        let max_image_tar_size = env::var("MAX_IMAGE_TAR_SIZE")
+            .unwrap_or_else(|_| "1073741824".to_string())
+            .parse::<u64>()
+            .context("MAX_IMAGE_TAR_SIZE must be a positive integer")?;
+
+        let max_trivy_report_size = env::var("MAX_TRIVY_REPORT_SIZE")
+            .unwrap_or_else(|_| "10485760".to_string())
+            .parse::<usize>()
+            .context("MAX_TRIVY_REPORT_SIZE must be a positive integer")?;
+
+        let registry_url = env::var("REGISTRY_URL").unwrap_or_else(|_| "".to_string());
+        let registry_repository =
+            env::var("REGISTRY_REPOSITORY").unwrap_or_else(|_| "".to_string());
+        let registry_username = env::var("REGISTRY_USERNAME").unwrap_or_else(|_| "".to_string());
+        let registry_password = env::var("REGISTRY_PASSWORD").unwrap_or_else(|_| "".to_string());
 
         Ok(Self {
             database_url,
@@ -76,6 +108,15 @@ impl AppConfig {
             runner_cpus_limit,
             runner_pids_limit,
             runner_network_policy,
+            kaniko_memory_limit,
+            kaniko_cpus_limit,
+            kaniko_pids_limit,
+            max_image_tar_size,
+            max_trivy_report_size,
+            registry_url,
+            registry_repository,
+            registry_username,
+            registry_password,
         })
     }
 }

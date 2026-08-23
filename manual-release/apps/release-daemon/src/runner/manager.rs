@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use uuid::Uuid;
 
 use super::docker_ubuntu_runner::LocalDockerUbuntuRunner;
 use super::mock_runner::MockRunner;
@@ -14,25 +15,38 @@ impl RunnerManager {
         Self { config }
     }
 
-    pub fn create_runner(&self, workspace_path: PathBuf) -> Result<Box<dyn Runner>, RunnerError> {
+    pub fn create_runner(
+        &self,
+        workspace_path: PathBuf,
+        release_id: Uuid,
+        job_id: Uuid,
+    ) -> Result<Box<dyn Runner>, RunnerError> {
         match self.config.runner_type.as_str() {
             "LOCAL_UBUNTU" => Ok(Box::new(LocalDockerUbuntuRunner::new(
                 workspace_path,
                 self.config.clone(),
+                release_id,
+                job_id,
             ))),
-            "MOCK" => Ok(Box::new(MockRunner::new(workspace_path))),
-            "MOCK_FAIL_CREATE" => Ok(Box::new(MockRunner::new(workspace_path).with_fail_create())),
+            "MOCK" => Ok(Box::new(MockRunner::new(
+                workspace_path,
+                release_id,
+                job_id,
+            ))),
+            "MOCK_FAIL_CREATE" => Ok(Box::new(
+                MockRunner::new(workspace_path, release_id, job_id).with_fail_create(),
+            )),
             "MOCK_FAIL_COMMAND" => Ok(Box::new(
-                MockRunner::new(workspace_path).with_fail_command(),
+                MockRunner::new(workspace_path, release_id, job_id).with_fail_command(),
             )),
             "MOCK_FAIL_PREPARE" => Ok(Box::new(
-                MockRunner::new(workspace_path).with_fail_prepare(),
+                MockRunner::new(workspace_path, release_id, job_id).with_fail_prepare(),
             )),
             "MOCK_FAIL_CLEANUP" => Ok(Box::new(
-                MockRunner::new(workspace_path).with_fail_cleanup(),
+                MockRunner::new(workspace_path, release_id, job_id).with_fail_cleanup(),
             )),
             "MOCK_FAIL_PREPARE_AND_CLEANUP" => Ok(Box::new(
-                MockRunner::new(workspace_path)
+                MockRunner::new(workspace_path, release_id, job_id)
                     .with_fail_prepare()
                     .with_fail_cleanup(),
             )),

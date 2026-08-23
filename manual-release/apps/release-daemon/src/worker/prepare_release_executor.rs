@@ -1,8 +1,10 @@
 use sqlx::PgPool;
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
+use tracing::error;
 use uuid::Uuid;
 
+use crate::config::AppConfig;
 use crate::domain::job::{append_job_event, fail_job, fail_step, succeed_step};
 use crate::repositories::project_build_config_repository::ProjectBuildConfigRepository;
 use crate::repositories::release_repository::ReleaseRepository;
@@ -68,22 +70,35 @@ impl PrepareReleaseExecutor {
 
         let workspace_path = self.workspace_manager.get_workspace_path(job_id);
 
-        let mut runner = match self.runner_manager.create_runner(workspace_path.clone()) {
-            Ok(r) => r,
-            Err(e) => {
-                let error_msg = format!("Failed to create runner: {}", e);
-                let _ = fail_job(&self.pool, job_id, "RUNNER_ERROR", &error_msg).await;
-                let _ = release_repo
-                    .transition_status(release_id, &current_status, "FAILED", "SYSTEM", &error_msg)
-                    .await;
-                return Err(error_msg);
-            }
-        };
+        let runner =
+            match self
+                .runner_manager
+                .create_runner(workspace_path.clone(), release_id, job_id)
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let error_msg = format!("Failed to create runner: {}", e);
+                    let _ = fail_job(&self.pool, job_id, "RUNNER_ERROR", &error_msg).await;
+                    let _ = release_repo
+                        .transition_status(
+                            release_id,
+                            &current_status,
+                            "FAILED",
+                            "SYSTEM",
+                            &error_msg,
+                        )
+                        .await;
+                    return Err(error_msg);
+                }
+            };
+
+        // Use a drop guard to ensure the runner is cleaned up if the task is aborted/dropped.
+        let mut cleanup_guard = RunnerCleanupGuard::new(runner);
 
         // Use tokio::select! to race the inner execution against the cancellation token
         let execution_result = tokio::select! {
             res = self.execute_ci_pipeline(
-                runner.as_mut(),
+                cleanup_guard.runner.as_mut(),
                 job_id,
                 release_id,
                 validate_step_id,
@@ -99,8 +114,11 @@ impl PrepareReleaseExecutor {
             }
         };
 
-        // Guaranteed cleanup block (finally)
-        if let Err(e) = runner.cleanup().await {
+        // Normal completion path: mark guard as completed so it doesn't spawn detached cleanup,
+        // and do the cleanup synchronously here to record events.
+        cleanup_guard.completed = true;
+
+        if let Err(e) = cleanup_guard.runner.cleanup().await {
             let _ = append_job_event(
                 &self.pool,
                 job_id,
@@ -112,7 +130,7 @@ impl PrepareReleaseExecutor {
             .await;
         }
 
-        if let Err(e) = runner.destroy().await {
+        if let Err(e) = cleanup_guard.runner.destroy().await {
             let _ = append_job_event(
                 &self.pool,
                 job_id,
@@ -274,7 +292,8 @@ impl PrepareReleaseExecutor {
                     }
                 };
 
-                let executor = BuildPlanExecutor::new(self.pool.clone());
+                let app_config = AppConfig::from_env().map_err(|e| e.to_string())?;
+                let executor = BuildPlanExecutor::new(self.pool.clone(), app_config);
 
                 // CI RUNNING Phase
                 let ci_result = executor.execute_ci(&build_plan, job_id, &context).await;
@@ -431,8 +450,84 @@ impl PrepareReleaseExecutor {
                                         .await;
                                     *current_status = "IMAGE_APPROVED".to_string();
 
-                                    let _ = succeed_step(&self.pool, validate_step_id).await;
-                                    Ok(())
+                                    // PUBLISHING Phase
+                                    let _ = release_repo
+                                        .transition_status(
+                                            release_id,
+                                            current_status,
+                                            "PUBLISHING",
+                                            "SYSTEM",
+                                            "Publishing image to remote registry",
+                                        )
+                                        .await;
+                                    *current_status = "PUBLISHING".to_string();
+
+                                    let publish_result = executor
+                                        .execute_image_publish(
+                                            &build_plan,
+                                            release_id,
+                                            job_id,
+                                            &context,
+                                        )
+                                        .await;
+
+                                    match publish_result {
+                                        Ok(published) => {
+                                            if published {
+                                                let _ = release_repo
+                                                    .transition_status(
+                                                        release_id,
+                                                        current_status,
+                                                        "PUBLISHED",
+                                                        "SYSTEM",
+                                                        "Image successfully published",
+                                                    )
+                                                    .await;
+                                                *current_status = "PUBLISHED".to_string();
+
+                                                let _ = succeed_step(&self.pool, validate_step_id)
+                                                    .await;
+                                                Ok(())
+                                            } else {
+                                                // If no dockerfile, it wasn't published but it's okay? No, if dockerfile is absent, it skips to published?
+                                                // Wait, if no dockerfile, it's not a containerized release. We can just skip publishing.
+                                                let _ = release_repo
+                                                    .transition_status(
+                                                        release_id,
+                                                        current_status,
+                                                        "PUBLISHED",
+                                                        "SYSTEM",
+                                                        "No image to publish",
+                                                    )
+                                                    .await;
+                                                *current_status = "PUBLISHED".to_string();
+                                                let _ = succeed_step(&self.pool, validate_step_id)
+                                                    .await;
+                                                Ok(())
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let error_msg = e.to_string();
+                                            let _ = release_repo
+                                                .transition_status(
+                                                    release_id,
+                                                    current_status,
+                                                    "PUBLISH_FAILED",
+                                                    "SYSTEM",
+                                                    &format!("Image publish failed: {}", error_msg),
+                                                )
+                                                .await;
+                                            *current_status = "PUBLISH_FAILED".to_string();
+                                            let _ = fail_job(
+                                                &self.pool,
+                                                job_id,
+                                                "PUBLISH_FAILED",
+                                                &error_msg,
+                                            )
+                                            .await;
+                                            Err(error_msg)
+                                        }
+                                    }
                                 } else {
                                     let _ = release_repo
                                         .transition_status(
@@ -501,6 +596,32 @@ impl PrepareReleaseExecutor {
 
                 Err(error_msg)
             }
+        }
+    }
+}
+
+/// A drop guard that ensures the runner is cleaned up if the executing task is aborted/panics.
+struct RunnerCleanupGuard {
+    runner: Box<dyn Runner>,
+    completed: bool,
+}
+
+impl RunnerCleanupGuard {
+    fn new(runner: Box<dyn Runner>) -> Self {
+        Self {
+            runner,
+            completed: false,
+        }
+    }
+}
+
+impl Drop for RunnerCleanupGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            error!(
+                "Runner cleanup guard dropped before normal completion! Spawning detached cleanup."
+            );
+            self.runner.spawn_detached_cleanup();
         }
     }
 }

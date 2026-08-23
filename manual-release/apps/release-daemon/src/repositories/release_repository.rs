@@ -136,7 +136,7 @@ impl ReleaseRepository {
     ) -> Result<(), sqlx::Error> {
         let mut transaction = self.pool.begin().await?;
 
-        sqlx::query!(
+        let update_result = sqlx::query!(
             r#"
             UPDATE releases
             SET status = $1, updated_at = NOW()
@@ -148,6 +148,10 @@ impl ReleaseRepository {
         )
         .execute(&mut *transaction)
         .await?;
+
+        if update_result.rows_affected() == 0 {
+            return Err(sqlx::Error::RowNotFound);
+        }
 
         sqlx::query!(
             r#"

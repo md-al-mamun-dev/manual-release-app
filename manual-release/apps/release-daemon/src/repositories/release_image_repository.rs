@@ -2,6 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::domain::release_image::ReleaseImage;
+use chrono::Utc;
 
 pub struct ReleaseImageRepository {
     pool: PgPool,
@@ -42,7 +43,7 @@ impl ReleaseImageRepository {
         let row = sqlx::query_as!(
             ReleaseImage,
             r#"
-            SELECT id, release_id, job_id, git_sha, image_tag, image_digest, created_at
+            SELECT id, release_id, job_id, git_sha, image_tag, image_digest, created_at, registry, repository, remote_digest, publication_status, updated_at
             FROM release_images
             WHERE release_id = $1
             ORDER BY created_at DESC
@@ -54,5 +55,32 @@ impl ReleaseImageRepository {
         .await?;
 
         Ok(row)
+    }
+
+    pub async fn update_publishing_details(
+        &self,
+        release_id: Uuid,
+        registry: &str,
+        repository: &str,
+        remote_digest: &str,
+        publication_status: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            UPDATE release_images
+            SET registry = $1, repository = $2, remote_digest = $3, publication_status = $4, updated_at = $5
+            WHERE release_id = $6
+            "#,
+            registry,
+            repository,
+            remote_digest,
+            publication_status,
+            Utc::now(),
+            release_id
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }

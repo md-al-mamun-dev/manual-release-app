@@ -28,9 +28,23 @@ async fn setup_runner() -> (LocalDockerUbuntuRunner, PathBuf) {
         runner_cpus_limit: "1.0".into(),
         runner_pids_limit: "100".into(),
         runner_network_policy: "bridge".into(),
+        kaniko_memory_limit: "1024m".to_string(),
+        kaniko_cpus_limit: "2.0".to_string(),
+        kaniko_pids_limit: "200".to_string(),
+        max_image_tar_size: 1073741824,
+        max_trivy_report_size: 10485760,
+        registry_url: "".into(),
+        registry_repository: "".into(),
+        registry_username: "".into(),
+        registry_password: "".into(),
     });
 
-    let runner = LocalDockerUbuntuRunner::new(workspace.clone(), config);
+    let runner = LocalDockerUbuntuRunner::new(
+        workspace.clone(),
+        config,
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    );
     (runner, workspace)
 }
 

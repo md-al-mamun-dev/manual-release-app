@@ -20,10 +20,11 @@ use release_daemon::{
         environment_service::EnvironmentService,
         project_build_config_service::ProjectBuildConfigService,
         project_inspection_service::ProjectInspectionService, project_service::ProjectService,
-        release_service::ReleaseService,
+        reaper_service::StaleRunnerReaper, release_service::ReleaseService,
     },
     worker::JobWorker,
 };
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 #[actix_web::main]
@@ -42,6 +43,19 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::create_pool(&config.database_url).await?;
 
     tracing::info!("database connection established");
+
+    let reaper = StaleRunnerReaper::new(pool.clone());
+    tracing::info!("Running initial startup stale runner recovery...");
+    reaper.run_reaper_cycle().await;
+
+    // Spawn periodic background reaper
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            reaper.run_reaper_cycle().await;
+        }
+    });
 
     let project_repository = ProjectRepository::new(pool.clone());
     let project_service = ProjectService::new(project_repository.clone());

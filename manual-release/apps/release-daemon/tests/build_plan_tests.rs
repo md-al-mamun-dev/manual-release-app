@@ -28,11 +28,24 @@ async fn test_build_plan_generation_npm() {
         runner_cpus_limit: "1.0".to_string(),
         runner_pids_limit: "100".to_string(),
         runner_network_policy: "bridge".to_string(),
+        kaniko_memory_limit: "1024m".to_string(),
+        kaniko_cpus_limit: "2.0".to_string(),
+        kaniko_pids_limit: "200".to_string(),
+        max_image_tar_size: 1073741824,
+        max_trivy_report_size: 10485760,
+        registry_url: "".into(),
+        registry_repository: "".into(),
+        registry_username: "".into(),
+        registry_password: "".into(),
     };
 
-    let runner_manager = RunnerManager::new(config);
+    let runner_manager = RunnerManager::new(config.clone());
     let mut runner = runner_manager
-        .create_runner(PathBuf::from("/tmp/dummy"))
+        .create_runner(
+            PathBuf::from("/tmp/dummy"),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        )
         .unwrap();
 
     runner.create().await.unwrap();
@@ -86,11 +99,24 @@ async fn test_build_plan_generation_pnpm() {
         runner_cpus_limit: "1.0".to_string(),
         runner_pids_limit: "100".to_string(),
         runner_network_policy: "bridge".to_string(),
+        kaniko_memory_limit: "1024m".to_string(),
+        kaniko_cpus_limit: "2.0".to_string(),
+        kaniko_pids_limit: "200".to_string(),
+        max_image_tar_size: 1073741824,
+        max_trivy_report_size: 10485760,
+        registry_url: "".into(),
+        registry_repository: "".into(),
+        registry_username: "".into(),
+        registry_password: "".into(),
     };
 
-    let runner_manager = RunnerManager::new(config);
+    let runner_manager = RunnerManager::new(config.clone());
     let mut runner = runner_manager
-        .create_runner(PathBuf::from("/tmp/dummy"))
+        .create_runner(
+            PathBuf::from("/tmp/dummy"),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        )
         .unwrap();
 
     runner.create().await.unwrap();
@@ -147,11 +173,24 @@ async fn test_build_plan_generation_yarn() {
         runner_cpus_limit: "1.0".to_string(),
         runner_pids_limit: "100".to_string(),
         runner_network_policy: "bridge".to_string(),
+        kaniko_memory_limit: "1024m".to_string(),
+        kaniko_cpus_limit: "2.0".to_string(),
+        kaniko_pids_limit: "200".to_string(),
+        max_image_tar_size: 1073741824,
+        max_trivy_report_size: 10485760,
+        registry_url: "".into(),
+        registry_repository: "".into(),
+        registry_username: "".into(),
+        registry_password: "".into(),
     };
 
-    let runner_manager = RunnerManager::new(config);
+    let runner_manager = RunnerManager::new(config.clone());
     let mut runner = runner_manager
-        .create_runner(PathBuf::from("/tmp/dummy"))
+        .create_runner(
+            PathBuf::from("/tmp/dummy"),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        )
         .unwrap();
 
     runner.create().await.unwrap();

@@ -4,6 +4,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use crate::config::AppConfig;
 use crate::domain::build_plan::{BuildPlan, CommandData};
 use crate::domain::job::{append_job_event, create_step, fail_step, start_step, succeed_step};
 use crate::executor::process_result::ProcessOutcome;
@@ -19,11 +20,12 @@ pub enum BuildPlanExecutorError {
 
 pub struct BuildPlanExecutor {
     pool: PgPool,
+    config: AppConfig,
 }
 
 impl BuildPlanExecutor {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, config: AppConfig) -> Self {
+        Self { pool, config }
     }
 
     pub async fn execute_ci(
@@ -145,6 +147,24 @@ impl BuildPlanExecutor {
             Ok(passed)
         } else {
             Ok(true)
+        }
+    }
+
+    pub async fn execute_image_publish(
+        &self,
+        build_plan: &BuildPlan,
+        release_id: Uuid,
+        job_id: Uuid,
+        context: &RunnerExecutionContext<'_>,
+    ) -> Result<bool, BuildPlanExecutorError> {
+        if build_plan.dockerfile.is_some() {
+            // Assume step order 9 for image publish
+            let step_id = create_step(&self.pool, job_id, "PUBLISH_IMAGE", 9).await?;
+            self.execute_publish_image_step(step_id, release_id, job_id, context)
+                .await?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -273,10 +293,15 @@ impl BuildPlanExecutor {
                 id: Uuid::new_v4(),
                 release_id,
                 job_id,
-                git_sha,
+                git_sha: git_sha.clone(),
                 image_tag: tag.to_string(),
                 image_digest: digest,
                 created_at: chrono::Utc::now(),
+                registry: None,
+                repository: None,
+                remote_digest: None,
+                publication_status: None,
+                updated_at: None,
             };
             let repo = crate::repositories::release_image_repository::ReleaseImageRepository::new(
                 self.pool.clone(),
@@ -397,7 +422,7 @@ impl BuildPlanExecutor {
         let tar_input = "/workspace/image.tar";
         let report_output = "/workspace/trivy-report.json";
 
-        let result = match context
+        let (result, report_opt) = match context
             .runner()
             .scan_image(tar_input, report_output, context.cancel_token(), Some(tx))
             .await
@@ -421,26 +446,10 @@ impl BuildPlanExecutor {
             return Ok(false);
         }
 
-        // Read report from workspace
-        let report_path = context.runner().workspace().await.join("trivy-report.json");
-        
-        // Enforce 10MB report size limit
-        if let Ok(metadata) = tokio::fs::metadata(&report_path).await {
-            if metadata.len() > 10 * 1024 * 1024 {
-                let error_msg = format!("Trivy report file is too large ({} bytes). Maximum allowed is 10MB.", metadata.len());
-                fail_step(&self.pool, step_id, "REPORT_TOO_LARGE", &error_msg).await?;
-                return Err(BuildPlanExecutorError::StepFailed("SCAN_IMAGE".to_string(), error_msg));
-            }
-        }
-
-        let report_content = match tokio::fs::read_to_string(&report_path).await {
-            Ok(c) => c,
-            Err(e) => {
-                let error_msg = format!(
-                    "Failed to read Trivy report file at {}: {}",
-                    report_path.display(),
-                    e
-                );
+        let report_content = match report_opt {
+            Some(content) => content,
+            None => {
+                let error_msg = "Scanner did not return a valid report string.".to_string();
                 fail_step(&self.pool, step_id, "REPORT_READ_ERROR", &error_msg).await?;
                 return Err(BuildPlanExecutorError::StepFailed(
                     "SCAN_IMAGE".to_string(),
@@ -448,6 +457,20 @@ impl BuildPlanExecutor {
                 ));
             }
         };
+
+        // Check if report exceeds size bounds (bounded read by head ensures it shouldn't, but defense-in-depth)
+        if report_content.len() > self.config.max_trivy_report_size {
+            let error_msg = format!(
+                "Trivy report is too large ({} bytes). Maximum allowed is {} bytes.",
+                report_content.len(),
+                self.config.max_trivy_report_size
+            );
+            fail_step(&self.pool, step_id, "REPORT_TOO_LARGE", &error_msg).await?;
+            return Err(BuildPlanExecutorError::StepFailed(
+                "SCAN_IMAGE".to_string(),
+                error_msg,
+            ));
+        }
 
         // Parse Trivy report
         let report = match crate::domain::trivy_parser::TrivyParser::parse_json_str(&report_content)
@@ -527,6 +550,118 @@ impl BuildPlanExecutor {
             fail_step(&self.pool, step_id, "SECURITY_POLICY_VIOLATION", &fail_msg).await?;
             Ok(false)
         }
+    }
+
+    async fn execute_publish_image_step(
+        &self,
+        step_id: Uuid,
+        release_id: Uuid,
+        job_id: Uuid,
+        context: &RunnerExecutionContext<'_>,
+    ) -> Result<(), BuildPlanExecutorError> {
+        start_step(&self.pool, step_id).await?;
+
+        let _ = append_job_event(
+            &self.pool,
+            job_id,
+            Some(step_id),
+            "SYSTEM",
+            "INFO",
+            "Publishing image to registry...",
+        )
+        .await;
+
+        let registry = self.config.registry_url.clone();
+        let repository = self.config.registry_repository.clone();
+        let tag = "latest"; // or better, fetch from release details (assuming target-img is not pushed as target-img)
+        let username = self.config.registry_username.clone();
+        let password = self.config.registry_password.clone();
+
+        let (tx, mut rx) = mpsc::channel::<(String, String)>(100);
+        let pool = self.pool.clone();
+
+        let log_task = tokio::spawn(async move {
+            while let Some((stream, line)) = rx.recv().await {
+                // Skopeo logs might contain sensitive info if not careful, but password isn't in args
+                let _ =
+                    append_job_event(&pool, job_id, Some(step_id), &stream, "INFO", &line).await;
+            }
+        });
+
+        // The exact artifact path
+        let tar_path = "/workspace/image.tar";
+
+        let (result, digest_opt) = match context
+            .runner()
+            .publish_image(
+                tar_path,
+                &registry,
+                &repository,
+                tag,
+                &username,
+                &password,
+                context.cancel_token(),
+                Some(tx),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let error_msg = format!("Failed to execute publish_image on runner: {}", e);
+                fail_step(&self.pool, step_id, "RUNNER_ERROR", &error_msg).await?;
+                return Err(BuildPlanExecutorError::StepFailed(
+                    "PUBLISH_IMAGE".to_string(),
+                    error_msg,
+                ));
+            }
+        };
+
+        // drop tx to end log_task
+        let _ = log_task.await;
+
+        if let Some(remote_digest) = digest_opt {
+            let release_image_repo =
+                crate::repositories::release_image_repository::ReleaseImageRepository::new(
+                    self.pool.clone(),
+                );
+            if let Ok(Some(release_image)) = release_image_repo.get_by_release_id(release_id).await
+            {
+                // Ensure local digest matches remote digest (idempotency/security)
+                if release_image.image_digest != remote_digest {
+                    let error_msg = format!(
+                        "Digest mismatch! Expected {} but remote returned {}",
+                        release_image.image_digest, remote_digest
+                    );
+                    fail_step(&self.pool, step_id, "DIGEST_MISMATCH", &error_msg).await?;
+                    let _ = release_image_repo
+                        .update_publishing_details(
+                            release_id,
+                            &registry,
+                            &repository,
+                            &remote_digest,
+                            "PUBLISH_FAILED",
+                        )
+                        .await;
+                    return Err(BuildPlanExecutorError::StepFailed(
+                        "PUBLISH_IMAGE".to_string(),
+                        error_msg,
+                    ));
+                } else {
+                    let _ = release_image_repo
+                        .update_publishing_details(
+                            release_id,
+                            &registry,
+                            &repository,
+                            &remote_digest,
+                            "PUBLISHED",
+                        )
+                        .await;
+                }
+            }
+        }
+
+        self.handle_process_outcome(step_id, "PUBLISH_IMAGE", result)
+            .await
     }
 
     async fn handle_process_outcome(

@@ -80,9 +80,18 @@ fn create_executor(pool: PgPool, runner_type: &str) -> PrepareReleaseExecutor {
         runner_cpus_limit: "1.0".to_string(),
         runner_pids_limit: "100".to_string(),
         runner_network_policy: "bridge".to_string(),
+        kaniko_memory_limit: "1024m".to_string(),
+        kaniko_cpus_limit: "2.0".to_string(),
+        kaniko_pids_limit: "200".to_string(),
+        max_image_tar_size: 1073741824,
+        max_trivy_report_size: 10485760,
+        registry_url: "".into(),
+        registry_repository: "".into(),
+        registry_username: "".into(),
+        registry_password: "".into(),
     };
 
-    let runner_manager = RunnerManager::new(config);
+    let runner_manager = RunnerManager::new(config.clone());
     let workspace_manager = GitWorkspaceManager::new(PathBuf::from("/tmp/cicd_workspaces"));
 
     PrepareReleaseExecutor::new(pool, validation_service, runner_manager, workspace_manager)

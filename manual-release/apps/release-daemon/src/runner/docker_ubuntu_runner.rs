@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if)]
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -13,25 +14,33 @@ use crate::executor::process_result::{ProcessOutcome, ProcessResult};
 
 pub struct LocalDockerUbuntuRunner {
     workspace_path: PathBuf,
+    config: AppConfig,
     state: RunnerState,
     executor: ProcessExecutor,
     container_name: String,
     volume_name: String,
-    config: AppConfig,
+    runner_id: Uuid,
+    release_id: Uuid,
+    job_id: Uuid,
 }
 
 impl LocalDockerUbuntuRunner {
-    pub fn new(workspace_path: PathBuf, config: AppConfig) -> Self {
-        let runner_uuid = Uuid::new_v4();
-        let container_name = format!("cicd-runner-{}", runner_uuid);
-        let volume_name = format!("workspace-{}", runner_uuid);
+    pub fn new(workspace_path: PathBuf, config: AppConfig, release_id: Uuid, job_id: Uuid) -> Self {
+        let runner_id = uuid::Uuid::new_v4();
+        let unique_id = runner_id.to_string();
         Self {
             workspace_path,
-            state: RunnerState::Creating,
-            executor: ProcessExecutor::new(10 * 1024 * 1024, Duration::from_secs(5)),
-            container_name,
-            volume_name,
             config,
+            state: RunnerState::Creating,
+            executor: ProcessExecutor::new(
+                100 * 1024 * 1024, // 100MB output retention
+                Duration::from_secs(5),
+            ),
+            container_name: format!("cicd-runner-{}", unique_id),
+            volume_name: format!("cicd-workspace-{}", unique_id),
+            runner_id,
+            release_id,
+            job_id,
         }
     }
 
@@ -117,10 +126,24 @@ impl Runner for LocalDockerUbuntuRunner {
             "o=size=2G".to_string(),
             self.volume_name.clone(),
         ];
-        
-        let vol_result = self.executor.execute("docker", &volume_args, &self.workspace_path, &empty_env, Duration::from_secs(10), cancel_token.clone(), None).await;
+
+        let vol_result = self
+            .executor
+            .execute(
+                "docker",
+                &volume_args,
+                &self.workspace_path,
+                &empty_env,
+                Duration::from_secs(10),
+                cancel_token.clone(),
+                None,
+            )
+            .await;
         if !matches!(vol_result.outcome, ProcessOutcome::Succeeded) {
-            return Err(RunnerError::CreationFailed(format!("Failed to create workspace volume: {}", vol_result.stderr.text)));
+            return Err(RunnerError::CreationFailed(format!(
+                "Failed to create workspace volume: {}",
+                vol_result.stderr.text
+            )));
         }
 
         info!("Creating Docker container: {}", self.container_name);
@@ -147,6 +170,11 @@ impl Runner for LocalDockerUbuntuRunner {
             format!("--pids-limit={}", self.config.runner_pids_limit),
             // Network policy
             format!("--network={}", self.config.runner_network_policy),
+            // Managed Labels
+            "--label=cicd.managed=true".to_string(),
+            format!("--label=cicd.runner_id={}", self.runner_id),
+            format!("--label=cicd.release_id={}", self.release_id),
+            format!("--label=cicd.job_id={}", self.job_id),
         ];
 
         args.push(self.config.runner_ubuntu_image.clone());
@@ -190,16 +218,30 @@ impl Runner for LocalDockerUbuntuRunner {
             format!("{}/.", self.workspace_path.display()),
             format!("{}:/workspace/", self.container_name),
         ];
-        let cp_result = self.executor.execute("docker", &cp_args, &self.workspace_path, &HashMap::new(), Duration::from_secs(120), cancel_token.clone(), None).await;
+        let cp_result = self
+            .executor
+            .execute(
+                "docker",
+                &cp_args,
+                &self.workspace_path,
+                &HashMap::new(),
+                Duration::from_secs(120),
+                cancel_token.clone(),
+                None,
+            )
+            .await;
         if !matches!(cp_result.outcome, ProcessOutcome::Succeeded) {
-            return Err(RunnerError::PreparationFailed(format!("Failed to copy workspace to container: {}", cp_result.stderr.text)));
+            return Err(RunnerError::PreparationFailed(format!(
+                "Failed to copy workspace to container: {}",
+                cp_result.stderr.text
+            )));
         }
 
         // 1. apt-get update
         let res = self
             .exec_command(
                 &["apt-get", "update"],
-                Duration::from_secs(60),
+                Duration::from_secs(180),
                 cancel_token.clone(),
             )
             .await?;
@@ -269,10 +311,10 @@ impl Runner for LocalDockerUbuntuRunner {
             )));
         }
 
-        // 5. Install Node.js
+        // 5. Install Node.js and skopeo
         let res = self
             .exec_command(
-                &["apt-get", "install", "-y", "nodejs"],
+                &["apt-get", "install", "-y", "nodejs", "skopeo"],
                 Duration::from_secs(300),
                 cancel_token.clone(),
             )
@@ -286,22 +328,59 @@ impl Runner for LocalDockerUbuntuRunner {
 
         // 6. Download and Install Pinned Trivy Version Securely
         let res = self.exec_command(
-            &["curl", "-sL", "https://github.com/aquasecurity/trivy/releases/download/v0.53.0/trivy_0.53.0_Linux-64bit.tar.gz", "-o", "/tmp/trivy.tar.gz"],
+            &[
+                "curl",
+                "-fsSL",
+                "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz",
+                "-o",
+                "/tmp/trivy.tar.gz",
+            ],
             Duration::from_secs(300),
             cancel_token.clone(),
         ).await?;
         if !matches!(res.outcome, ProcessOutcome::Succeeded) {
-            return Err(RunnerError::PreparationFailed(format!("curl trivy failed: {}", res.stderr.text)));
+            return Err(RunnerError::PreparationFailed(format!(
+                "curl trivy failed: {}",
+                res.stderr.text
+            )));
         }
 
-        let res = self.exec_command(&["sha256sum", "/tmp/trivy.tar.gz"], Duration::from_secs(30), cancel_token.clone()).await?;
-        if !matches!(res.outcome, ProcessOutcome::Succeeded) || !res.stdout.text.starts_with("0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5") {
-             return Err(RunnerError::PreparationFailed(format!("Trivy SHA256 mismatch or error. Output: {}", res.stdout.text)));
+        let res = self
+            .exec_command(
+                &["sha256sum", "/tmp/trivy.tar.gz"],
+                Duration::from_secs(30),
+                cancel_token.clone(),
+            )
+            .await?;
+        let expected_hash = "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a";
+        if !matches!(res.outcome, ProcessOutcome::Succeeded)
+            || !res.stdout.text.starts_with(expected_hash)
+        {
+            return Err(RunnerError::PreparationFailed(format!(
+                "Trivy SHA256 mismatch or error. Output: {}",
+                res.stdout.text
+            )));
         }
 
-        let res = self.exec_command(&["tar", "-xzf", "/tmp/trivy.tar.gz", "-C", "/usr/local/bin", "trivy"], Duration::from_secs(30), cancel_token.clone()).await?;
+        let res = self
+            .exec_command(
+                &[
+                    "tar",
+                    "-xzf",
+                    "/tmp/trivy.tar.gz",
+                    "-C",
+                    "/usr/local/bin",
+                    "trivy",
+                ],
+                Duration::from_secs(30),
+                cancel_token.clone(),
+            )
+            .await?;
         if !matches!(res.outcome, ProcessOutcome::Succeeded) {
-            return Err(RunnerError::PreparationFailed(format!("Extract trivy failed: {}", res.stderr.text)));
+            return Err(RunnerError::PreparationFailed(format!(
+                "Extract trivy failed: {}",
+                res.stderr.text
+            )));
         }
 
         // 12. Create non-root user 'ci_user'
@@ -346,18 +425,44 @@ impl Runner for LocalDockerUbuntuRunner {
         self.verify_dependency(&["node", "-v"], "v20.", "Node.js")
             .await?;
         self.verify_dependency(&["npm", "-v"], "", "npm").await?; // just ensure it doesn't fail
-        self.verify_dependency(&["trivy", "--version"], "Version: 0.53.0", "Trivy")
+        self.verify_dependency(&["skopeo", "--version"], "skopeo version", "Skopeo")
+            .await?;
+        self.verify_dependency(&["trivy", "--version"], "Version: 0.74.0", "Trivy")
             .await?;
 
         // 14. Download Trivy Vulnerability DB to isolated root-owned directory
-        let res = self.exec_command(&["mkdir", "-p", "/var/lib/trivy"], Duration::from_secs(10), cancel_token.clone()).await?;
+        let res = self
+            .exec_command(
+                &["mkdir", "-p", "/var/lib/trivy"],
+                Duration::from_secs(10),
+                cancel_token.clone(),
+            )
+            .await?;
         if !matches!(res.outcome, ProcessOutcome::Succeeded) {
-            return Err(RunnerError::PreparationFailed(format!("mkdir /var/lib/trivy failed: {}", res.stderr.text)));
+            return Err(RunnerError::PreparationFailed(format!(
+                "mkdir /var/lib/trivy failed: {}",
+                res.stderr.text
+            )));
         }
 
-        let res = self.exec_command(&["trivy", "image", "--download-db-only", "--cache-dir", "/var/lib/trivy"], Duration::from_secs(300), cancel_token.clone()).await?;
+        let res = self
+            .exec_command(
+                &[
+                    "trivy",
+                    "image",
+                    "--download-db-only",
+                    "--cache-dir",
+                    "/var/lib/trivy",
+                ],
+                Duration::from_secs(300),
+                cancel_token.clone(),
+            )
+            .await?;
         if !matches!(res.outcome, ProcessOutcome::Succeeded) {
-            return Err(RunnerError::PreparationFailed(format!("Failed to download Trivy DB: {}", res.stderr.text)));
+            return Err(RunnerError::PreparationFailed(format!(
+                "Failed to download Trivy DB: {}",
+                res.stderr.text
+            )));
         }
 
         self.state = RunnerState::Running;
@@ -414,7 +519,8 @@ impl Runner for LocalDockerUbuntuRunner {
             .await;
 
         // Process Cancellation Cleanup
-        if result.outcome == ProcessOutcome::Cancelled || result.outcome == ProcessOutcome::TimedOut {
+        if result.outcome == ProcessOutcome::Cancelled || result.outcome == ProcessOutcome::TimedOut
+        {
             let pkill_args = vec![
                 "exec".to_string(),
                 self.container_name.clone(),
@@ -423,7 +529,18 @@ impl Runner for LocalDockerUbuntuRunner {
                 "-u".to_string(),
                 "ci_user".to_string(),
             ];
-            let _ = self.executor.execute("docker", &pkill_args, &self.workspace_path, &HashMap::new(), Duration::from_secs(5), CancellationToken::new(), None).await;
+            let _ = self
+                .executor
+                .execute(
+                    "docker",
+                    &pkill_args,
+                    &self.workspace_path,
+                    &HashMap::new(),
+                    Duration::from_secs(5),
+                    CancellationToken::new(),
+                    None,
+                )
+                .await;
         }
 
         Ok(result)
@@ -462,6 +579,11 @@ impl Runner for LocalDockerUbuntuRunner {
         let kaniko_args = vec![
             "run".to_string(),
             "--rm".to_string(),
+            format!("--memory={}", self.config.kaniko_memory_limit),
+            format!("--cpus={}", self.config.kaniko_cpus_limit),
+            format!("--pids-limit={}", self.config.kaniko_pids_limit),
+            "--tmpfs".to_string(),
+            "/tmp:size=1G".to_string(),
             "-v".to_string(),
             format!("{}:/workspace", self.volume_name),
             "gcr.io/kaniko-project/executor:latest".to_string(),
@@ -503,7 +625,18 @@ impl Runner for LocalDockerUbuntuRunner {
             format!("{}:/workspace/image.digest", self.container_name),
             format!("{}/image.digest", self.workspace_path.display()),
         ];
-        let _ = self.executor.execute("docker", &cp_digest_args, &self.workspace_path, &empty_env, Duration::from_secs(30), cancel_token.clone(), None).await;
+        let _ = self
+            .executor
+            .execute(
+                "docker",
+                &cp_digest_args,
+                &self.workspace_path,
+                &empty_env,
+                Duration::from_secs(30),
+                cancel_token.clone(),
+                None,
+            )
+            .await;
 
         // Read digest
         let digest_path = self.workspace_path.join("image.digest");
@@ -515,16 +648,76 @@ impl Runner for LocalDockerUbuntuRunner {
             }
         };
 
+        // Obtain image.tar size inside the container before copying
+        let stat_args = vec![
+            "exec".to_string(),
+            self.container_name.clone(),
+            "stat".to_string(),
+            "-c".to_string(),
+            "%s".to_string(),
+            "/workspace/image.tar".to_string(),
+        ];
+
+        let stat_res = self
+            .executor
+            .execute(
+                "docker",
+                &stat_args,
+                &self.workspace_path,
+                &empty_env,
+                Duration::from_secs(10),
+                cancel_token.clone(),
+                None,
+            )
+            .await;
+
+        if matches!(stat_res.outcome, ProcessOutcome::Succeeded) {
+            if let Ok(size_str) = stat_res.stdout.text.trim().parse::<u64>() {
+                if size_str > self.config.max_image_tar_size {
+                    return Err(RunnerError::ExecutionFailed(format!(
+                        "image.tar size {} exceeds maximum allowed {}",
+                        size_str, self.config.max_image_tar_size
+                    )));
+                }
+            }
+        }
+
         // Extract image.tar from the volume to the host so it can be loaded
         let cp_tar_args = vec![
             "cp".to_string(),
             format!("{}:/workspace/image.tar", self.container_name),
             format!("{}/image.tar", self.workspace_path.display()),
         ];
-        let cp_tar_res = self.executor.execute("docker", &cp_tar_args, &self.workspace_path, &empty_env, Duration::from_secs(120), cancel_token.clone(), None).await;
+        let cp_tar_res = self
+            .executor
+            .execute(
+                "docker",
+                &cp_tar_args,
+                &self.workspace_path,
+                &empty_env,
+                Duration::from_secs(120),
+                cancel_token.clone(),
+                None,
+            )
+            .await;
         if !matches!(cp_tar_res.outcome, ProcessOutcome::Succeeded) {
-            warn!("Failed to extract image.tar from volume: {}", cp_tar_res.stderr.text);
+            warn!(
+                "Failed to extract image.tar from volume: {}",
+                cp_tar_res.stderr.text
+            );
             return Ok((result, None));
+        }
+
+        // Defense in depth: Verify size of the extracted file on the host
+        let host_tar_path = self.workspace_path.join("image.tar");
+        if let Ok(metadata) = tokio::fs::metadata(&host_tar_path).await {
+            if metadata.len() > self.config.max_image_tar_size {
+                return Err(RunnerError::ExecutionFailed(format!(
+                    "host image.tar size {} exceeds maximum allowed {}",
+                    metadata.len(),
+                    self.config.max_image_tar_size
+                )));
+            }
         }
 
         // Now load the image into the local docker daemon
@@ -760,7 +953,7 @@ impl Runner for LocalDockerUbuntuRunner {
         report_output_path: &str,
         cancel_token: CancellationToken,
         output_sender: Option<mpsc::Sender<(String, String)>>,
-    ) -> Result<ProcessResult, RunnerError> {
+    ) -> Result<(ProcessResult, Option<String>), RunnerError> {
         if self.state != RunnerState::Running {
             return Err(RunnerError::ExecutionFailed(
                 "Runner is not in Running state".into(),
@@ -784,37 +977,212 @@ impl Runner for LocalDockerUbuntuRunner {
 
         let empty_env = HashMap::new();
 
-        let res = self.execute(
-            "trivy",
-            &trivy_args,
-            &empty_env,
-            Duration::from_secs(300), // 5 minutes timeout for vulnerability scan
-            cancel_token.clone(),
-            output_sender,
-        )
-        .await;
+        let res = self
+            .execute(
+                "trivy",
+                &trivy_args,
+                &empty_env,
+                Duration::from_secs(300), // 5 minutes timeout for vulnerability scan
+                cancel_token.clone(),
+                output_sender,
+            )
+            .await;
 
         if let Ok(process_res) = &res {
             if matches!(process_res.outcome, ProcessOutcome::Succeeded) {
-                // Extract report from volume to host
-                let cp_report_args = vec![
-                    "cp".to_string(),
-                    format!("{}:{}", self.container_name, report_output_path),
-                    format!("{}/trivy-report.json", self.workspace_path.display()),
+                let max_report_read = self.config.max_trivy_report_size + 1;
+
+                // Read report into memory using bounded head command to prevent TOCTOU and memory exhaustion
+                let head_args = vec![
+                    "exec".to_string(),
+                    "-u".to_string(),
+                    "ci_user".to_string(),
+                    self.container_name.clone(),
+                    "head".to_string(),
+                    "-c".to_string(),
+                    max_report_read.to_string(),
+                    report_output_path.to_string(),
                 ];
-                let _ = self.executor.execute(
-                    "docker", 
-                    &cp_report_args, 
-                    &self.workspace_path, 
-                    &empty_env, 
-                    Duration::from_secs(30), 
-                    cancel_token, 
-                    None
-                ).await;
+
+                let head_res = self
+                    .executor
+                    .execute(
+                        "docker",
+                        &head_args,
+                        &self.workspace_path,
+                        &empty_env,
+                        Duration::from_secs(30),
+                        cancel_token,
+                        None,
+                    )
+                    .await;
+
+                if matches!(head_res.outcome, ProcessOutcome::Succeeded) {
+                    return Ok((process_res.clone(), Some(head_res.stdout.text)));
+                } else {
+                    return Err(RunnerError::ExecutionFailed(format!(
+                        "Failed to read Trivy report: {}",
+                        head_res.stderr.text
+                    )));
+                }
             }
         }
 
-        res
+        match res {
+            Ok(process_res) => Ok((process_res, None)),
+            Err(e) => Err(e),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn publish_image(
+        &self,
+        tar_path: &str,
+        registry: &str,
+        repository: &str,
+        tag: &str,
+        username: &str,
+        password: &str,
+        cancel_token: CancellationToken,
+        output_sender: Option<tokio::sync::mpsc::Sender<(String, String)>>,
+    ) -> Result<(ProcessResult, Option<String>), RunnerError> {
+        if self.state != RunnerState::Running {
+            return Err(RunnerError::ExecutionFailed(
+                "Runner is not in Running state".into(),
+            ));
+        }
+
+        let temp_auth_path = std::env::temp_dir().join(format!("auth-{}.json", Uuid::new_v4()));
+        let auth_json = serde_json::json!({
+            "auths": {
+                registry: {
+                    "username": username,
+                    "password": password
+                }
+            }
+        });
+
+        tokio::fs::write(&temp_auth_path, auth_json.to_string())
+            .await
+            .map_err(|e| {
+                RunnerError::PreparationFailed(format!("Failed to write temp auth file: {}", e))
+            })?;
+
+        let cp_res = self
+            .executor
+            .execute(
+                "docker",
+                &[
+                    "cp".to_string(),
+                    temp_auth_path.to_str().unwrap().to_string(),
+                    format!("{}:/tmp/auth.json", self.container_name),
+                ],
+                &self.workspace_path,
+                &HashMap::new(),
+                Duration::from_secs(10),
+                cancel_token.clone(),
+                None,
+            )
+            .await;
+
+        let _ = tokio::fs::remove_file(&temp_auth_path).await;
+
+        if cp_res.outcome != ProcessOutcome::Succeeded {
+            return Err(RunnerError::ExecutionFailed(
+                "Failed to copy auth to runner".into(),
+            ));
+        }
+
+        let chown_args = vec![
+            "exec".to_string(),
+            self.container_name.clone(),
+            "chown".to_string(),
+            "ci_user:ci_user".to_string(),
+            "/tmp/auth.json".to_string(),
+        ];
+
+        let _ = self
+            .executor
+            .execute(
+                "docker",
+                &chown_args,
+                &self.workspace_path,
+                &HashMap::new(),
+                Duration::from_secs(10),
+                cancel_token.clone(),
+                None,
+            )
+            .await;
+
+        let dest_image = format!("docker://{}/{}:{}", registry, repository, tag);
+
+        let skopeo_args = vec![
+            "copy".to_string(),
+            "--authfile".to_string(),
+            "/tmp/auth.json".to_string(),
+            "--digestfile".to_string(),
+            "/workspace/remote_image.digest".to_string(),
+            format!("docker-archive:{}", tar_path),
+            dest_image.clone(),
+        ];
+
+        let result = self
+            .execute(
+                "skopeo",
+                &skopeo_args,
+                &HashMap::new(),
+                Duration::from_secs(600),
+                cancel_token.clone(),
+                output_sender.clone(),
+            )
+            .await?;
+
+        let rm_args = vec![
+            "exec".to_string(),
+            self.container_name.clone(),
+            "rm".to_string(),
+            "-f".to_string(),
+            "/tmp/auth.json".to_string(),
+        ];
+        let _ = self
+            .executor
+            .execute(
+                "docker",
+                &rm_args,
+                &self.workspace_path,
+                &HashMap::new(),
+                Duration::from_secs(10),
+                cancel_token.clone(),
+                None,
+            )
+            .await;
+
+        let mut digest_opt = None;
+        if result.outcome == ProcessOutcome::Succeeded {
+            let cat_args = vec![
+                "exec".to_string(),
+                self.container_name.clone(),
+                "cat".to_string(),
+                "/workspace/remote_image.digest".to_string(),
+            ];
+            let cat_res = self
+                .executor
+                .execute(
+                    "docker",
+                    &cat_args,
+                    &self.workspace_path,
+                    &HashMap::new(),
+                    Duration::from_secs(10),
+                    cancel_token.clone(),
+                    None,
+                )
+                .await;
+            if cat_res.outcome == ProcessOutcome::Succeeded {
+                digest_opt = Some(cat_res.stdout.text.trim().to_string());
+            }
+        }
+
+        Ok((result, digest_opt))
     }
 
     async fn cleanup(&mut self) -> Result<(), RunnerError> {
@@ -846,13 +1214,9 @@ impl Runner for LocalDockerUbuntuRunner {
 
         if !matches!(result.outcome, ProcessOutcome::Succeeded) {
             warn!(
-                "Failed to remove docker container {}: {}",
+                "Failed to remove docker container {} (it may have already been removed or crashed): {}",
                 self.container_name, result.stderr.text
             );
-            return Err(RunnerError::CleanupFailed(format!(
-                "Failed to remove docker container: {}",
-                result.stderr.text
-            )));
         }
 
         let vol_args = vec![
@@ -881,5 +1245,32 @@ impl Runner for LocalDockerUbuntuRunner {
     async fn destroy(&mut self) -> Result<(), RunnerError> {
         self.state = RunnerState::Destroyed;
         Ok(())
+    }
+    /// Spawns a detached tokio task to run `docker rm -f` and `docker volume rm -f`.
+    /// This ensures cleanup survives the cancellation/drop of the parent task.
+    fn spawn_detached_cleanup(&self) {
+        let container_name = self.container_name.clone();
+        let volume_name = self.volume_name.clone();
+
+        tokio::spawn(async move {
+            info!("Detached cleanup started for container: {}", container_name);
+
+            // Container removal
+            let _ = tokio::process::Command::new("docker")
+                .args(["rm", "-f", &container_name])
+                .output()
+                .await;
+
+            // Volume removal
+            let _ = tokio::process::Command::new("docker")
+                .args(["volume", "rm", "-f", &volume_name])
+                .output()
+                .await;
+
+            info!(
+                "Detached cleanup finished for container: {}",
+                container_name
+            );
+        });
     }
 }

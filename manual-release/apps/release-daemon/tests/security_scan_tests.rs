@@ -256,7 +256,7 @@ async fn test_scanner_malformed_report_fails_safely(pool: PgPool) {
     use release_daemon::domain::project_build_config::{
         ApplicationType, Framework, PackageManager,
     };
-    use release_daemon::runner::{context::RunnerExecutionContext, manager::RunnerManager};
+    use release_daemon::runner::context::RunnerExecutionContext;
     use release_daemon::services::build_plan_executor::BuildPlanExecutor;
     use std::path::PathBuf;
     use tokio_util::sync::CancellationToken;
@@ -323,6 +323,11 @@ async fn test_scanner_malformed_report_fails_safely(pool: PgPool) {
         image_tag: "target-img:sha123".to_string(),
         image_digest: "sha256:digest1234567890".to_string(),
         created_at: chrono::Utc::now(),
+        registry: None,
+        repository: None,
+        remote_digest: None,
+        publication_status: None,
+        updated_at: None,
     };
     let img_repo =
         release_daemon::repositories::release_image_repository::ReleaseImageRepository::new(
@@ -352,10 +357,24 @@ async fn test_scanner_malformed_report_fails_safely(pool: PgPool) {
         runner_cpus_limit: "1.0".to_string(),
         runner_pids_limit: "100".to_string(),
         runner_network_policy: "bridge".to_string(),
+        kaniko_memory_limit: "1024m".to_string(),
+        kaniko_cpus_limit: "2.0".to_string(),
+        kaniko_pids_limit: "200".to_string(),
+        max_image_tar_size: 1073741824,
+        max_trivy_report_size: 10485760,
+        registry_url: "".into(),
+        registry_repository: "".into(),
+        registry_username: "".into(),
+        registry_password: "".into(),
     };
 
-    let runner_manager = RunnerManager::new(config);
-    let mut runner = runner_manager.create_runner(workspace.clone()).unwrap();
+    let mut mock_runner = release_daemon::runner::mock_runner::MockRunner::new(
+        workspace.clone(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    );
+    mock_runner.fail_trivy_parse = true;
+    let mut runner: Box<dyn release_daemon::runner::Runner> = Box::new(mock_runner);
     runner.create().await.unwrap();
     runner.prepare().await.unwrap();
     let context = RunnerExecutionContext::new(runner.as_mut(), CancellationToken::new());
@@ -380,7 +399,7 @@ async fn test_scanner_malformed_report_fails_safely(pool: PgPool) {
     };
 
     let policy = SecurityPolicy::default();
-    let executor = BuildPlanExecutor::new(pool.clone());
+    let executor = BuildPlanExecutor::new(pool.clone(), config.clone());
     let result = executor
         .execute_image_scan(&build_plan, release_id, job_id, &policy, &context)
         .await;
