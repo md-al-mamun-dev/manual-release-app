@@ -38,6 +38,8 @@ pub struct BuildPlan {
     pub typecheck_command: Option<CommandData>,
     pub test_command: Option<CommandData>,
     pub build_command: Option<CommandData>,
+    pub build_image_command: Option<CommandData>,
+    pub test_image_command: Option<CommandData>,
     pub dockerfile: Option<String>,
     pub docker_context: Option<String>,
     pub application_port: Option<i32>,

@@ -33,7 +33,7 @@ async fn setup_db(pool: &PgPool) -> (Uuid, Uuid, Uuid, Uuid) {
 
     let step_id = Uuid::new_v4();
     sqlx::query!(
-        "INSERT INTO job_steps (id, job_id, step_key, step_order, status) VALUES ($1, $2, 'NODE_CI', 1, 'RUNNING')",
+        "INSERT INTO job_steps (id, job_id, step_key, step_order, status) VALUES ($1, $2, 'SOURCE_VALIDATION', 0, 'RUNNING')",
         step_id,
         job_id
     )
@@ -45,6 +45,15 @@ async fn setup_db(pool: &PgPool) -> (Uuid, Uuid, Uuid, Uuid) {
     sqlx::query!(
         "INSERT INTO releases (id, project_id, version, git_commit, git_branch, status, requested_by) VALUES ($1, $2, '1.0.0', '1234567890123456789012345678901234567890', 'main', 'CREATED', 'test_user')",
         release_id,
+        project_id
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query!(
+        "INSERT INTO project_build_configs (id, project_id, application_type, framework, runtime_version, package_manager) VALUES ($1, $2, 'NODE', 'UNKNOWN', '20', 'NPM')",
+        Uuid::new_v4(),
         project_id
     )
     .execute(pool)
@@ -222,4 +231,113 @@ async fn test_cleanup_failure_preserves_original_error(pool: PgPool) {
             .any(|msg| msg.contains("Simulated cleanup failure")),
         "Should log cleanup failure"
     );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_prepare_release_executor_pipeline_success_approved(pool: PgPool) {
+    let repo_id = Uuid::new_v4();
+    let repo_path = format!("/tmp/test_exec_repo_{}", repo_id);
+    std::fs::create_dir_all(&repo_path).unwrap();
+
+    let _ = std::process::Command::new("git")
+        .arg("init")
+        .current_dir(&repo_path)
+        .output();
+    std::fs::write(
+        format!("{}/package.json", repo_path),
+        "{\"name\":\"test\",\"version\":\"1.0.0\"}",
+    )
+    .unwrap();
+    std::fs::write(format!("{}/package-lock.json", repo_path), "{\"name\":\"test\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"packages\":{\"\":{\"name\":\"test\",\"version\":\"1.0.0\"}}}").unwrap();
+    let _ = std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(&repo_path)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["commit", "-m", "initial commit"])
+        .current_dir(&repo_path)
+        .output();
+    let rev_parse = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    let sha = String::from_utf8_lossy(&rev_parse.stdout)
+        .trim()
+        .to_string();
+
+    let project_id = Uuid::new_v4();
+    sqlx::query!(
+        "INSERT INTO projects (id, name, repository_path) VALUES ($1, $2, $3)",
+        project_id,
+        format!("Proj {}", project_id),
+        repo_path
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let job_id = Uuid::new_v4();
+    sqlx::query!(
+        "INSERT INTO jobs (id, project_id, job_type, status) VALUES ($1, $2, 'PREPARE_RELEASE', 'RUNNING')",
+        job_id,
+        project_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let step_id = Uuid::new_v4();
+    sqlx::query!(
+        "INSERT INTO job_steps (id, job_id, step_key, step_order, status) VALUES ($1, $2, 'SOURCE_VALIDATION', 0, 'RUNNING')",
+        step_id,
+        job_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let release_id = Uuid::new_v4();
+    sqlx::query!(
+        "INSERT INTO releases (id, project_id, version, git_commit, git_branch, status, requested_by) VALUES ($1, $2, '1.0.0', $3, 'main', 'CREATED', 'test_user')",
+        release_id,
+        project_id,
+        sha
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query!(
+        "INSERT INTO project_build_configs (id, project_id, application_type, framework, runtime_version, package_manager) VALUES ($1, $2, 'NODE', 'UNKNOWN', '20', 'NPM')",
+        Uuid::new_v4(),
+        project_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let executor = create_executor(pool.clone(), "MOCK");
+    let cancel_token = CancellationToken::new();
+
+    let result = executor
+        .execute(job_id, release_id, step_id, cancel_token)
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Pipeline should succeed end-to-end: {:?}",
+        result.err()
+    );
+
+    let release = sqlx::query!("SELECT status FROM releases WHERE id = $1", release_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        release.status, "IMAGE_APPROVED",
+        "Release status should reach IMAGE_APPROVED"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_path);
 }

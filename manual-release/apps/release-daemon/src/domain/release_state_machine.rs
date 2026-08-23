@@ -11,14 +11,23 @@ pub fn can_transition(from: ReleaseStatus, to: ReleaseStatus) -> bool {
             | (SourceValidated, Failed)
             | (CiRunning, CiPassed)
             | (CiRunning, Failed)
-            | (CiPassed, ImageBuilt)
+            | (CiPassed, ImageBuilding)
             | (CiPassed, Failed)
-            | (ImageBuilt, ImageTested)
+            | (ImageBuilding, ImageBuilt)
+            | (ImageBuilding, Failed)
+            | (ImageBuilt, ImageTesting)
             | (ImageBuilt, Failed)
-            | (ImageTested, ScanPassed)
+            | (ImageTesting, ImageTested)
+            | (ImageTesting, Failed)
+            | (ImageTested, SecurityScanning)
             | (ImageTested, Failed)
-            | (ScanPassed, Published)
+            | (SecurityScanning, ScanPassed)
+            | (SecurityScanning, SecurityFailed)
+            | (SecurityScanning, Failed)
+            | (ScanPassed, ImageApproved)
             | (ScanPassed, Failed)
+            | (ImageApproved, Published)
+            | (ImageApproved, Failed)
             | (Published, StagingDeploying)
             | (Published, Failed)
             | (StagingDeploying, StagingVerified)
@@ -66,6 +75,27 @@ mod tests {
         assert!(!can_transition(CiRunning, ProductionVerified));
 
         assert!(!can_transition(ImageBuilt, Published));
+    }
+
+    #[test]
+    fn allows_security_scanning_progression() {
+        assert!(can_transition(ImageTested, SecurityScanning));
+        assert!(can_transition(SecurityScanning, ScanPassed));
+        assert!(can_transition(SecurityScanning, SecurityFailed));
+        assert!(can_transition(ScanPassed, ImageApproved));
+        assert!(can_transition(ImageApproved, Published));
+    }
+
+    #[test]
+    fn prevents_security_scanning_skips() {
+        assert!(!can_transition(ImageTested, ImageApproved));
+        assert!(!can_transition(ImageTested, Published));
+        assert!(!can_transition(ImageTested, ScanPassed));
+        assert!(!can_transition(SecurityScanning, ImageApproved));
+        assert!(!can_transition(SecurityScanning, Published));
+        assert!(!can_transition(SecurityFailed, ImageApproved));
+        assert!(!can_transition(SecurityFailed, Published));
+        assert!(!can_transition(ScanPassed, Published));
     }
 
     #[test]

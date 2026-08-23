@@ -52,6 +52,32 @@ pub trait Runner: Send + Sync {
         output_sender: Option<mpsc::Sender<(String, String)>>,
     ) -> Result<ProcessResult, RunnerError>;
 
+    async fn build_image(
+        &self,
+        dockerfile: &str,
+        context: &str,
+        tag: &str,
+        cancel_token: CancellationToken,
+        output_sender: Option<mpsc::Sender<(String, String)>>,
+    ) -> Result<(ProcessResult, Option<String>), RunnerError>;
+
+    async fn test_image(
+        &self,
+        tag: &str,
+        port: i32,
+        health_endpoint: &str,
+        cancel_token: CancellationToken,
+        output_sender: Option<mpsc::Sender<(String, String)>>,
+    ) -> Result<ProcessResult, RunnerError>;
+
+    async fn scan_image(
+        &self,
+        tar_path: &str,
+        report_output_path: &str,
+        cancel_token: CancellationToken,
+        output_sender: Option<mpsc::Sender<(String, String)>>,
+    ) -> Result<ProcessResult, RunnerError>;
+
     async fn cleanup(&mut self) -> Result<(), RunnerError>;
     async fn destroy(&mut self) -> Result<(), RunnerError>;
 }

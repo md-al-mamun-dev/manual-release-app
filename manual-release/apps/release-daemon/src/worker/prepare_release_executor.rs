@@ -4,11 +4,13 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::domain::job::{append_job_event, fail_job, fail_step, succeed_step};
+use crate::repositories::project_build_config_repository::ProjectBuildConfigRepository;
 use crate::repositories::release_repository::ReleaseRepository;
 use crate::runner::Runner;
 use crate::runner::context::RunnerExecutionContext;
 use crate::runner::manager::RunnerManager;
-use crate::services::node_ci_service::NodeCiService;
+use crate::services::build_plan_executor::BuildPlanExecutor;
+use crate::services::build_plan_generator::BuildPlanGenerator;
 use crate::services::source_validation_service::SourceValidationService;
 use crate::workspace::git_workspace::GitWorkspaceManager;
 
@@ -227,11 +229,55 @@ impl PrepareReleaseExecutor {
 
                 *current_status = "CI_RUNNING".to_string();
 
-                let node_ci = NodeCiService::new(self.pool.clone());
-                let ci_result = node_ci
-                    .execute_ci(job_id, validate_step_id, workspace_path, &context)
-                    .await;
+                let release = match release_repo.find_by_id(release_id).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => {
+                        let error_msg = "Release not found".to_string();
+                        let _ = fail_job(&self.pool, job_id, "CI_FAILED", &error_msg).await;
+                        return Err(error_msg);
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to fetch release: {}", e);
+                        let _ = fail_job(&self.pool, job_id, "CI_FAILED", &error_msg).await;
+                        return Err(error_msg);
+                    }
+                };
 
+                let config_repo = ProjectBuildConfigRepository::new(self.pool.clone());
+                let config = match config_repo.find_by_project_id(release.project_id).await {
+                    Ok(Some(c)) => c,
+                    Ok(None) => {
+                        let error_msg = "Project build config not found".to_string();
+                        let _ = fail_job(&self.pool, job_id, "CI_FAILED", &error_msg).await;
+                        return Err(error_msg);
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to fetch build config: {}", e);
+                        let _ = fail_job(&self.pool, job_id, "CI_FAILED", &error_msg).await;
+                        return Err(error_msg);
+                    }
+                };
+
+                let build_plan = match BuildPlanGenerator::generate(
+                    &config,
+                    &context,
+                    workspace_path,
+                    release.git_commit.clone(),
+                )
+                .await
+                {
+                    Ok(plan) => plan,
+                    Err(e) => {
+                        let error_msg = format!("Failed to generate build plan: {}", e);
+                        let _ = fail_job(&self.pool, job_id, "CI_FAILED", &error_msg).await;
+                        return Err(error_msg);
+                    }
+                };
+
+                let executor = BuildPlanExecutor::new(self.pool.clone());
+
+                // CI RUNNING Phase
+                let ci_result = executor.execute_ci(&build_plan, job_id, &context).await;
                 match ci_result {
                     Ok(_) => {
                         let _ = release_repo
@@ -243,35 +289,196 @@ impl PrepareReleaseExecutor {
                                 "CI Passed",
                             )
                             .await;
-
                         *current_status = "CI_PASSED".to_string();
-
-                        // Simulate remaining steps
-                        let simulated_steps = vec![
-                            "CREATE_RUNNER",
-                            "BUILD_IMAGE",
-                            "TEST_IMAGE",
-                            "SCAN_IMAGE",
-                            "PUBLISH_IMAGE",
-                        ];
-
-                        for step in simulated_steps {
-                            let _ = append_job_event(
-                                &self.pool,
-                                job_id,
-                                None,
-                                "SYSTEM",
-                                "INFO",
-                                &format!("Simulated step {} succeeded", step),
-                            )
-                            .await;
-                        }
-
-                        Ok(())
                     }
                     Err(e) => {
                         let error_msg = e.to_string();
                         let _ = fail_job(&self.pool, job_id, "CI_FAILED", &error_msg).await;
+                        return Err(error_msg);
+                    }
+                }
+
+                // IMAGE BUILDING Phase
+                let _ = release_repo
+                    .transition_status(
+                        release_id,
+                        current_status,
+                        "IMAGE_BUILDING",
+                        "SYSTEM",
+                        "Building image",
+                    )
+                    .await;
+                *current_status = "IMAGE_BUILDING".to_string();
+
+                let build_result = executor
+                    .execute_image_build(&build_plan, release_id, job_id, &context)
+                    .await;
+                match build_result {
+                    Ok(built) => {
+                        if built {
+                            let _ = release_repo
+                                .transition_status(
+                                    release_id,
+                                    current_status,
+                                    "IMAGE_BUILT",
+                                    "SYSTEM",
+                                    "Image built successfully",
+                                )
+                                .await;
+                            *current_status = "IMAGE_BUILT".to_string();
+                        } else {
+                            // If it didn't build an image, we jump to SCAN_PASSED (as a placeholder)
+                            // But for now let's just leave it at IMAGE_BUILT (or we can just skip)
+                            let _ = release_repo
+                                .transition_status(
+                                    release_id,
+                                    current_status,
+                                    "IMAGE_BUILT",
+                                    "SYSTEM",
+                                    "No image configured to build",
+                                )
+                                .await;
+                            *current_status = "IMAGE_BUILT".to_string();
+                        }
+                    }
+                    Err(e) => {
+                        let error_msg = e.to_string();
+                        let _ =
+                            fail_job(&self.pool, job_id, "IMAGE_BUILD_FAILED", &error_msg).await;
+                        return Err(error_msg);
+                    }
+                }
+
+                // IMAGE TESTING Phase
+                let _ = release_repo
+                    .transition_status(
+                        release_id,
+                        current_status,
+                        "IMAGE_TESTING",
+                        "SYSTEM",
+                        "Testing image",
+                    )
+                    .await;
+                *current_status = "IMAGE_TESTING".to_string();
+
+                let test_result = executor
+                    .execute_image_test(&build_plan, job_id, &context)
+                    .await;
+                match test_result {
+                    Ok(tested) => {
+                        let msg = if tested {
+                            "Image tested successfully"
+                        } else {
+                            "No image tests configured"
+                        };
+                        let _ = release_repo
+                            .transition_status(
+                                release_id,
+                                current_status,
+                                "IMAGE_TESTED",
+                                "SYSTEM",
+                                msg,
+                            )
+                            .await;
+                        *current_status = "IMAGE_TESTED".to_string();
+
+                        // SECURITY SCANNING Phase
+                        let _ = release_repo
+                            .transition_status(
+                                release_id,
+                                current_status,
+                                "SECURITY_SCANNING",
+                                "SYSTEM",
+                                "Scanning image for vulnerabilities",
+                            )
+                            .await;
+                        *current_status = "SECURITY_SCANNING".to_string();
+
+                        let default_policy =
+                            crate::domain::security_policy::SecurityPolicy::default();
+                        let scan_result = executor
+                            .execute_image_scan(
+                                &build_plan,
+                                release_id,
+                                job_id,
+                                &default_policy,
+                                &context,
+                            )
+                            .await;
+
+                        match scan_result {
+                            Ok(passed) => {
+                                if passed {
+                                    let _ = release_repo
+                                        .transition_status(
+                                            release_id,
+                                            current_status,
+                                            "SCAN_PASSED",
+                                            "SYSTEM",
+                                            "Security scan passed",
+                                        )
+                                        .await;
+                                    *current_status = "SCAN_PASSED".to_string();
+
+                                    let _ = release_repo
+                                        .transition_status(
+                                            release_id,
+                                            current_status,
+                                            "IMAGE_APPROVED",
+                                            "SYSTEM",
+                                            "Image approved for release",
+                                        )
+                                        .await;
+                                    *current_status = "IMAGE_APPROVED".to_string();
+
+                                    let _ = succeed_step(&self.pool, validate_step_id).await;
+                                    Ok(())
+                                } else {
+                                    let _ = release_repo
+                                        .transition_status(
+                                            release_id,
+                                            current_status,
+                                            "SECURITY_FAILED",
+                                            "SYSTEM",
+                                            "Security scan failed policy evaluation",
+                                        )
+                                        .await;
+                                    *current_status = "SECURITY_FAILED".to_string();
+
+                                    let error_msg = "Security scan failed policy check".to_string();
+                                    let _ = fail_job(
+                                        &self.pool,
+                                        job_id,
+                                        "SECURITY_SCAN_FAILED",
+                                        &error_msg,
+                                    )
+                                    .await;
+                                    Err(error_msg)
+                                }
+                            }
+                            Err(e) => {
+                                let error_msg = e.to_string();
+                                let _ = release_repo
+                                    .transition_status(
+                                        release_id,
+                                        current_status,
+                                        "SECURITY_FAILED",
+                                        "SYSTEM",
+                                        &format!("Security scan error: {}", error_msg),
+                                    )
+                                    .await;
+                                *current_status = "SECURITY_FAILED".to_string();
+
+                                let _ =
+                                    fail_job(&self.pool, job_id, "SECURITY_SCAN_ERROR", &error_msg)
+                                        .await;
+                                Err(error_msg)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let error_msg = e.to_string();
+                        let _ = fail_job(&self.pool, job_id, "IMAGE_TEST_FAILED", &error_msg).await;
                         Err(error_msg)
                     }
                 }

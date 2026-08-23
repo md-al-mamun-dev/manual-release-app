@@ -7,7 +7,10 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 async fn setup_runner() -> (LocalDockerUbuntuRunner, PathBuf) {
-    let workspace = PathBuf::from("/tmp/docker-test-workspace");
+    let workspace = PathBuf::from(format!(
+        "/tmp/docker-test-workspace-{}",
+        uuid::Uuid::new_v4()
+    ));
     let _ = std::fs::remove_dir_all(&workspace);
     std::fs::create_dir_all(&workspace).unwrap();
 
@@ -130,4 +133,137 @@ async fn test_cancellation_removes_container() {
         .output()
         .unwrap();
     let _out = String::from_utf8_lossy(&res.stdout);
+}
+
+#[tokio::test]
+async fn test_image_building_and_testing() {
+    let (mut runner, workspace) = setup_runner().await;
+
+    // Create a simple Dockerfile for testing
+    let dockerfile_path = workspace.join("Dockerfile");
+    std::fs::write(&dockerfile_path, "FROM python:3.9-alpine\nRUN echo \"print('hello')\" > /app.py\nUSER 1000\nEXPOSE 8080\nCMD python3 -m http.server 8080\n").unwrap();
+
+    runner.create().await.expect("Failed to create container");
+    runner.prepare().await.expect("Failed to prepare container");
+
+    let token = CancellationToken::new();
+
+    // 1. Build Image via Kaniko
+    let build_res = runner
+        .build_image(
+            "Dockerfile",
+            ".",
+            "target-test-img:latest",
+            token.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        build_res.0.exit_code == Some(0),
+        "Kaniko build failed: {}\n{}",
+        build_res.0.stdout.text,
+        build_res.0.stderr.text
+    );
+
+    // Verify digest was captured
+    assert!(build_res.1.is_some(), "Digest should be captured");
+    assert!(build_res.1.unwrap().starts_with("sha256:"));
+
+    // Ensure tarball exists in workspace
+    assert!(
+        workspace.join("image.tar").exists(),
+        "image.tar missing after Kaniko build"
+    );
+
+    // 2. Test Image
+    let test_res = runner
+        .test_image("target-test-img:latest", 8080, "/", token.clone(), None)
+        .await
+        .unwrap();
+    assert!(
+        test_res.exit_code == Some(0),
+        "Smoke test failed: {}\n{}",
+        test_res.stdout.text,
+        test_res.stderr.text
+    );
+
+    runner.cleanup().await.expect("Failed to cleanup");
+}
+
+#[tokio::test]
+async fn test_test_image_rejects_root() {
+    let (mut runner, workspace) = setup_runner().await;
+
+    // Create a Dockerfile that defaults to root
+    let dockerfile_path = workspace.join("Dockerfile");
+    std::fs::write(&dockerfile_path, "FROM alpine:3.18\nCMD sleep 10\n").unwrap();
+
+    runner.create().await.expect("Failed to create container");
+    runner.prepare().await.expect("Failed to prepare container");
+    let token = CancellationToken::new();
+
+    let build_res = runner
+        .build_image(
+            "Dockerfile",
+            ".",
+            "target-root-img:latest",
+            token.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(build_res.0.exit_code, Some(0));
+
+    let test_res = runner
+        .test_image("target-root-img:latest", 8080, "/", token.clone(), None)
+        .await
+        .unwrap();
+
+    // Should fail because it's root
+    assert_ne!(test_res.exit_code, Some(0));
+    assert!(
+        test_res.stderr.text.contains("Security Policy Violation"),
+        "Got stderr: {}",
+        test_res.stderr.text
+    );
+
+    runner.cleanup().await.expect("Failed to cleanup");
+}
+
+#[tokio::test]
+async fn test_dockerignore_secret_protection() {
+    let (mut runner, workspace) = setup_runner().await;
+
+    // Create secrets in workspace
+    std::fs::write(workspace.join(".env"), "SECRET=123").unwrap();
+    std::fs::write(workspace.join("id_rsa"), "private key").unwrap();
+
+    // Create Dockerfile
+    let dockerfile_path = workspace.join("Dockerfile");
+    std::fs::write(&dockerfile_path, "FROM alpine:3.18\n").unwrap();
+
+    runner.create().await.expect("Failed to create container");
+    runner.prepare().await.expect("Failed to prepare container");
+    let token = CancellationToken::new();
+
+    let build_res = runner
+        .build_image(
+            "Dockerfile",
+            ".",
+            "test-secrets:latest",
+            token.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(build_res.0.exit_code, Some(0));
+
+    // Verify .dockerignore was created and contains the secrets
+    let dockerignore = std::fs::read_to_string(workspace.join(".dockerignore")).unwrap();
+    assert!(dockerignore.contains(".env"));
+    assert!(dockerignore.contains("id_rsa"));
+    assert!(dockerignore.contains("*.pem"));
+
+    runner.cleanup().await.expect("Failed to cleanup");
 }

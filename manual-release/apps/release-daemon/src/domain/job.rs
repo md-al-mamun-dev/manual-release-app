@@ -100,3 +100,42 @@ pub async fn succeed_step(pool: &PgPool, step_id: Uuid) -> sqlx::Result<()> {
 
     Ok(())
 }
+
+pub async fn create_step(
+    pool: &PgPool,
+    job_id: Uuid,
+    step_key: &str,
+    step_order: i32,
+) -> sqlx::Result<Uuid> {
+    let step_id = Uuid::new_v4();
+    sqlx::query!(
+        r#"
+        INSERT INTO job_steps (id, job_id, step_key, step_order, status)
+        VALUES ($1, $2, $3, $4, 'PENDING')
+        "#,
+        step_id,
+        job_id,
+        step_key,
+        step_order
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(step_id)
+}
+
+pub async fn start_step(pool: &PgPool, step_id: Uuid) -> sqlx::Result<()> {
+    sqlx::query!(
+        r#"
+        UPDATE job_steps
+        SET status = 'RUNNING',
+            started_at = NOW()
+        WHERE id = $1
+        "#,
+        step_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}

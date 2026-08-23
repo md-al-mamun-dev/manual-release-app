@@ -22,6 +22,9 @@ impl RunnerManager {
             ))),
             "MOCK" => Ok(Box::new(MockRunner::new(workspace_path))),
             "MOCK_FAIL_CREATE" => Ok(Box::new(MockRunner::new(workspace_path).with_fail_create())),
+            "MOCK_FAIL_COMMAND" => Ok(Box::new(
+                MockRunner::new(workspace_path).with_fail_command(),
+            )),
             "MOCK_FAIL_PREPARE" => Ok(Box::new(
                 MockRunner::new(workspace_path).with_fail_prepare(),
             )),
